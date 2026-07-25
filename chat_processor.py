@@ -131,7 +131,7 @@ def _render_ansi(component, inherited_color: str | None = None) -> str:
 def process_chat(conn, raw_content):
     """
     处理聊天内容：JSON 聊天组件 或 NBT 提取的纯文本。
-    打印到终端 → 提取纯文本 → 检测 ??command / AuthMe。
+    打印到终端 → 提取纯文本 → 检测 ??command。
     """
     plain = ""  # 提取的纯文本
 
@@ -151,7 +151,7 @@ def process_chat(conn, raw_content):
             print(ansi)
         plain = _extract_plain(content)
     elif isinstance(raw_content, str):
-        # NBT 提取的纯文本（如 AuthMe 消息）
+        # NBT 提取的纯文本
         plain = raw_content
         if plain.strip():
             print(plain)

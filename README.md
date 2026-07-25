@@ -7,7 +7,6 @@
 - **原生协议实现**：从 VarInt 编解码到 NBT 解析，完全自研 Minecraft 1.21.4 网络协议
 - **聊天监听与命令响应**：监听游戏公聊消息，响应以 `??` 开头的玩家指令
 - **MIDI 音乐播放**：解析 MIDI 文件，将音符映射为 Unicode 字符通过封包发送给钢琴插件播放
-- **自动 AuthMe 认证**：中英文双语提示检测，支持自动注册和登录
 - **压缩支持**：处理 zlib 压缩的 Minecraft 封包
 - **Velocity/BungeeCord 代理**：支持登录阶段的代理转发
 - **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
@@ -21,7 +20,7 @@ mcbot-python/
 ├── mc_protocol.py       # 核心协议层：TCP 连接、封包编解码、登录流程
 ├── chat_processor.py    # 聊天解析：JSON/NBT → 纯文本 + ANSI 输出
 ├── command_manager.py   # 命令注册与分发系统
-├── auth_handler.py      # AuthMe 自动认证（中英文识别）
+
 ├── midi_processor.py    # MIDI 文件解析与播放
 ├── utils.py             # 工具函数：全局连接引用、快捷发送方法
 ├── ping_server.py       # 独立工具：探测服务器版本和在线人数
@@ -43,7 +42,7 @@ mcbot-python/
 
 - Python 3.10+
 - 目标 Minecraft 服务器版本 **1.21.4**（协议版本 769）
-- 服务器需启用离线模式（offline mode），或有 AuthMe 登录插件
+- 服务器需启用离线模式（offline mode）
 
 ### 安装
 
@@ -63,7 +62,6 @@ SERVER_PORT = 25565             # 服务器端口
 BOT_USERNAME = "RS_Bot"        # Bot 用户名
 ```
 
-如需修改 AuthMe 密码，编辑 `auth_handler.py` 中的 `_password` 变量。
 
 ### 运行
 
