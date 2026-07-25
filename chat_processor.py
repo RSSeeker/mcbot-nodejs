@@ -158,6 +158,10 @@ def process_chat(conn, raw_content):
     else:
         return
 
+    # 调试：打印解析出的纯文本
+    if plain.strip():
+        logger.info(f"[纯文本] {plain[:300]}")
+
     # 检测玩家聊天 (格式: "[玩家]XXX" 或 "[地皮]XXX")
     if plain.startswith("[玩家]") or plain.startswith("[地皮]"):
         player_name, chat_msg = _extract_player_and_msg(content)
@@ -165,6 +169,14 @@ def process_chat(conn, raw_content):
             command_line = chat_msg[2:].strip()
             logger.info(f"[命令] {player_name}: {command_line}")
             CommandManager.process_command(conn, command_line, player_name)
+
+    # 通用检测：消息中包含 ?? 开头的内容（适配不同服务器聊天格式）
+    else:
+        idx = plain.find("??")
+        if idx != -1:
+            command_line = plain[idx + 2:].strip()
+            logger.info(f"[命令] {command_line}")
+            CommandManager.process_command(conn, command_line, "")
 
 
 def _extract_player_and_msg(content) -> tuple[str, str]:
