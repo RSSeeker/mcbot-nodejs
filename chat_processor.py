@@ -162,21 +162,21 @@ def process_chat(conn, raw_content):
     if plain.strip():
         logger.info(f"[纯文本] {plain[:300]}")
 
-    # 检测玩家聊天 (格式: "[玩家]XXX" 或 "[地皮]XXX")
+    # 优先尝试结构化提取（获取玩家名）
+    player_name = ""
+    chat_msg = ""
     if plain.startswith("[玩家]") or plain.startswith("[地皮]"):
         player_name, chat_msg = _extract_player_and_msg(content)
-        if chat_msg and chat_msg.startswith("??"):
-            command_line = chat_msg[2:].strip()
-            logger.info(f"[命令] {player_name}: {command_line}")
-            CommandManager.process_command(conn, command_line, player_name)
 
-    # 通用检测：消息中包含 ?? 开头的内容（适配不同服务器聊天格式）
-    else:
-        idx = plain.find("??")
-        if idx != -1:
-            command_line = plain[idx + 2:].strip()
-            logger.info(f"[命令] {command_line}")
-            CommandManager.process_command(conn, command_line, "")
+    # 如果结构化提取失败，从纯文本中检测 ??
+    if not (chat_msg and chat_msg.startswith("??")):
+        chat_msg = plain
+
+    if chat_msg and "??" in chat_msg:
+        idx = chat_msg.index("??")
+        command_line = chat_msg[idx + 2:].strip()
+        logger.info(f"[命令] {player_name}: {command_line}")
+        CommandManager.process_command(conn, command_line, player_name)
 
 
 def _extract_player_and_msg(content) -> tuple[str, str]:
