@@ -7,14 +7,16 @@ import json
 import logging
 
 from command_manager import CommandManager
+from utils import get_username
 
 logger = logging.getLogger("bot")
 
 
 # ── JSON 聊天组件 → 纯文本 ──
 
-def _extract_plain(component) -> str:
-    """递归提取 Component 树中的纯文本"""
+def _extract_plain(component, include_hover: bool = True) -> str:
+    """递归提取 Component 树中的纯文本
+    include_hover=False 时跳过 hoverEvent/show_text 内的点击动作文本"""
     if isinstance(component, str):
         return component
     if isinstance(component, dict):
@@ -26,20 +28,20 @@ def _extract_plain(component) -> str:
             parts.append(f"[{component['translate']}]")
         if "extra" in component:
             for child in component["extra"]:
-                parts.append(_extract_plain(child))
+                parts.append(_extract_plain(child, include_hover))
         # 1.21+ 使用 content 格式
         if "content" in component:
             if isinstance(component["content"], dict):
                 if "text" in component["content"]:
                     parts.insert(0, component["content"]["text"])
-        # 处理 hoverEvent
-        if "hoverEvent" in component:
+        # 处理 hoverEvent（仅在 include_hover=True 时）
+        if include_hover and "hoverEvent" in component:
             hover = component["hoverEvent"]
             if isinstance(hover, dict) and "contents" in hover:
-                parts.append(_extract_plain(hover["contents"]))
+                parts.append(_extract_plain(hover["contents"], include_hover))
         return "".join(parts)
     if isinstance(component, list):
-        return "".join(_extract_plain(c) for c in component)
+        return "".join(_extract_plain(c, include_hover) for c in component)
     return ""
 
 
@@ -149,7 +151,8 @@ def process_chat(conn, raw_content):
         ansi = _render_ansi(content)
         if ansi.strip():
             print(ansi)
-        plain = _extract_plain(content)
+        # 用于命令检测的纯文本：不包含 hover 点击动作文本
+        plain = _extract_plain(content, include_hover=False)
     elif isinstance(raw_content, str):
         # NBT 提取的纯文本
         plain = raw_content
@@ -167,6 +170,11 @@ def process_chat(conn, raw_content):
     chat_msg = ""
     if plain.startswith("[玩家]") or plain.startswith("[地皮]"):
         player_name, chat_msg = _extract_player_and_msg(content)
+
+    # 跳过 Bot 自己的消息
+    bot_name = get_username()
+    if bot_name and player_name == bot_name:
+        return
 
     # 如果结构化提取失败，从纯文本中检测 ??
     if not (chat_msg and chat_msg.startswith("??")):

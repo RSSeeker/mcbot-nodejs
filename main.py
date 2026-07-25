@@ -21,7 +21,7 @@ from mc_protocol import Connection
 from chat_processor import process_chat
 from command_manager import CommandManager
 from commands import register_all
-from utils import set_connection, send_chat, send_command
+from utils import set_connection, set_username, send_chat, send_command
 
 # ── 配置 ──
 SERVER_HOST = "mc.weeaxe.cn"
@@ -49,6 +49,7 @@ def main():
     # 创建连接
     conn = Connection(SERVER_HOST, SERVER_PORT)
     set_connection(conn)
+    set_username(USERNAME)
 
     # 注册聊天处理器
     def _on_system_chat(conn, pkt_id: int, data: bytes):
