@@ -1,7 +1,7 @@
 """
 main.py — mcbot Python 入口
 =============================
-启动 Mineflayer Node.js 代理 → 监听事件 → 响应 ??command → MIDI 播放
+启动 Mineflayer Node.js 代理 → 监听事件 → 响应 ??command
 
 用法:
     python main.py
@@ -32,7 +32,6 @@ SERVER_PORT = _cfg["server"]["port"]
 SERVER_VERSION = _cfg["server"].get("version", "1.21.4")
 USERNAME = _cfg["bot"]["username"]
 PASSWORD = _cfg["bot"].get("password", "")
-MIDI_DIR = _cfg.get("midi_dir", "midi")
 COMMAND_PREFIX = _cfg.get("command_prefix", "??")
 
 # ── 日志 ──
@@ -44,8 +43,6 @@ logger = logging.getLogger("bot")
 
 
 def main():
-    os.makedirs(MIDI_DIR, exist_ok=True)
-
     set_username(USERNAME)
     set_command_prefix(COMMAND_PREFIX)
 
@@ -77,7 +74,6 @@ def main():
     print("  mcbot-python 已启动 (Mineflayer 代理)")
     print(f"  服务器: {SERVER_HOST}:{SERVER_PORT} (MC {SERVER_VERSION})")
     print(f"  用户名: {USERNAME}")
-    print(f"  MIDI 目录: {MIDI_DIR}")
     print(f"  在游戏内发送 {COMMAND_PREFIX}help 查看命令")
     print("=" * 50)
     print("  输入消息按 Enter 发送 (以 / 开头执行命令，输入 quit 退出)")

@@ -24,8 +24,14 @@ def _extract_plain(component, include_hover: bool = True) -> str:
         if "text" in component:
             parts.append(str(component["text"]))
         if "translate" in component:
-            # 翻译键直接作为 fallback
-            parts.append(f"[{component['translate']}]")
+            # 处理 with 参数（翻译占位符的实际内容）
+            with_items = component.get("with")
+            if with_items:
+                for w in with_items:
+                    parts.append(_extract_plain(w, include_hover))
+            else:
+                # 无 with 时使用翻译键作为 fallback
+                parts.append(f"[{component['translate']}]")
         if "extra" in component:
             for child in component["extra"]:
                 parts.append(_extract_plain(child, include_hover))
@@ -97,7 +103,14 @@ def _render_ansi(component, inherited_color: str | None = None) -> str:
 
         text = component.get("text", "")
         if "translate" in component:
-            text = f"[{component['translate']}]"
+            # 处理 with 参数（翻译占位符的实际内容）
+            with_items = component.get("with")
+            if with_items:
+                for w in with_items:
+                    parts.append(_render_ansi(w, color))
+                text = ""  # 已通过 with 展开，不再追加 translate key
+            else:
+                text = f"[{component['translate']}]"
         # 1.21+ content format
         if "content" in component:
             if isinstance(component["content"], dict):

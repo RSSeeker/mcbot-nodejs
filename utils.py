@@ -67,11 +67,6 @@ def send_command(command: str):
     logger.info(f"[Bot → Cmd] {command}")
 
 
-def send_suggestion(tx_id: int, text: str):
-    """发送命令建议（MIDI 音符用）"""
-    _send_json({"type": "suggestion", "id": tx_id, "text": text})
-
-
 def send_respawn():
     """发送重生指令"""
     _send_json({"type": "respawn"})
