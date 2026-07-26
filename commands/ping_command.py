@@ -2,6 +2,7 @@
 import json
 import os
 import threading
+import time
 
 from command_manager import Command
 from ping_server import ping_server
@@ -47,39 +48,37 @@ def _format_result(player: str, result: dict, host: str, port: int):
         return
 
     lines = []
-    lines.append(f"§a{result['host']}:{result['port']}§r")
+    lines.append(f"{result['host']}:{result['port']}")
 
     vr = result.get("version_range")
     if vr:
-        lines.append(f"  版本: §e{result['version_name']}§r  |  支持: §b{vr}§r")
+        lines.append(f"  版本: {result['version_name']}  |  支持: {vr}")
     else:
-        lines.append(f"  版本: §e{result['version_name']}§r (proto {result['protocol']})")
+        lines.append(f"  版本: {result['version_name']} (proto {result['protocol']})")
 
     lat = result["latency"]
-    lat_color = "§a" if lat < 50 else ("§e" if lat < 150 else "§c")
-    lines.append(f"  延迟: {lat_color}{lat}ms§r")
+    lines.append(f"  延迟: {lat}ms")
 
     online = result["online"]
     max_p = result["max"]
-    pct = online / max_p * 100 if max_p > 0 else 0
-    pct_color = "§a" if pct < 50 else ("§e" if pct < 80 else "§c")
-    lines.append(f"  玩家: {pct_color}{online}/{max_p}§r")
+    lines.append(f"  玩家: {online}/{max_p}")
 
     sample = result.get("players_sample")
     if sample:
         names = [p["name"] for p in sample][:10]
-        lines.append(f"  在线: §7{', '.join(names)}§r")
+        lines.append(f"  在线: {', '.join(names)}")
         if len(sample) > 10:
-            lines.append(f"  §7... 还有 {len(sample) - 10} 人§r")
+            lines.append(f"  ... 还有 {len(sample) - 10} 人")
 
     motd = result.get("motd", "")
     if motd:
         for ml in motd.split("\n")[:2]:
             if ml.strip():
-                lines.append(f"  §f{ml.strip()[:40]}§r")
+                lines.append(f"  {ml.strip()[:40]}")
 
     for line in lines:
         send_whisper(player, f"[Ping] {line}")
+        time.sleep(0.1)  # 每条间隔 0.1s，避免发送过快被踢
 
 
 def _execute(conn, args: list[str], player: str):
