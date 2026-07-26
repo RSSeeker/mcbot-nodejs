@@ -4,14 +4,24 @@ utils.py — 工具函数，通过 JSON Lines IPC 与 Mineflayer 代理通信。
 
 import json
 import logging
+import os
 import sys
 
 logger = logging.getLogger("bot")
 
+# ── 自动从 config.json 加载初始配置 ──
+_CFG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+try:
+    with open(_CFG_PATH, "r", encoding="utf-8") as _f:
+        _init_cfg = json.load(_f)
+    _bot_username = _init_cfg.get("bot", {}).get("username", "")
+    _command_prefix = _init_cfg.get("command_prefix", "??")
+except Exception:
+    _bot_username = ""
+    _command_prefix = "??"
+
 # 全局状态
 _bot_stdin = sys.stdin  # Node 子进程的 stdin（实际写入用）
-_bot_username = ""
-_command_prefix = "??"
 
 
 def set_stdin(fd):
@@ -59,6 +69,12 @@ def send_chat(message: str):
     """通过 Bot 发送公聊消息"""
     _send_json({"type": "chat", "message": message})
     logger.info(f"[Bot → Chat] {message}")
+
+
+def send_whisper(player: str, message: str):
+    """通过 /tell 私发消息给指定玩家"""
+    send_command(f"tell {player} {message}")
+    logger.info(f"[Bot → Whisper] {player}: {message}")
 
 
 def send_command(command: str):
@@ -131,3 +147,66 @@ def send_switch_slot(slot: int):
     """切换物品栏: slot 1-9"""
     _send_json({"type": "slot", "slot": slot})
     logger.info(f"[Bot → Slot] {slot}")
+
+
+def send_cancel():
+    """取消所有操作（停止挖掘/使用物品/弓箭/移动）"""
+    _send_json({"type": "cancel"})
+    logger.info("[Bot → Cancel]")
+
+
+def send_activate_item():
+    """开始使用手持物品（吃东西/拉弓上弹等）"""
+    _send_json({"type": "activate_item"})
+    logger.info("[Bot → ActivateItem]")
+
+
+def send_deactivate_item():
+    """停止使用手持物品（放箭/停止进食等）"""
+    _send_json({"type": "deactivate_item"})
+    logger.info("[Bot → DeactivateItem]")
+
+
+def send_equip(item_name: str, destination: str = "hand"):
+    """装备物品: destination = hand/head/torso/legs/feet/off-hand"""
+    _send_json({"type": "equip", "item": item_name, "destination": destination})
+    logger.info(f"[Bot → Equip] {item_name} → {destination}")
+
+
+def send_mount():
+    """骑乘视线中的实体或最近的坐骑"""
+    _send_json({"type": "mount"})
+    logger.info("[Bot → Mount]")
+
+
+def send_dismount():
+    """从坐骑上下来"""
+    _send_json({"type": "dismount"})
+    logger.info("[Bot → Dismount]")
+
+
+def send_set_control_state(control: str, state: bool):
+    """通用控制状态: forward/back/left/right/jump/sneak/sprint"""
+    _send_json({"type": "set_control_state", "control": control, "state": state})
+    logger.info(f"[Bot → Control] {control}={state}")
+
+
+def send_status_request():
+    """请求 Bot 状态（位置、血量等），由事件线程异步返回"""
+    _send_json({"type": "status"})
+    logger.info("[Bot → StatusRequest]")
+
+
+def send_look(yaw: float | None = None, pitch: float = 0.0, *,
+              player: str | None = None,
+              x: float | None = None, y: float | None = None, z: float | None = None):
+    """转动视角: 绝对角度 / 看向玩家 / 看向坐标"""
+    if player:
+        _send_json({"type": "look", "player": player})
+        logger.info(f"[Bot → Look] 看向玩家 {player}")
+    elif x is not None:
+        _send_json({"type": "look", "x": x, "y": y or 0, "z": z or 0})
+        logger.info(f"[Bot → Look] 看向坐标 {x} {y} {z}")
+    else:
+        _send_json({"type": "look", "yaw": yaw or 0, "pitch": pitch})
+        logger.info(f"[Bot → Look] yaw={yaw} pitch={pitch}")

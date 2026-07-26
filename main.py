@@ -20,7 +20,7 @@ import threading
 from chat_processor import process_chat
 from command_manager import CommandManager
 from commands import register_all
-from utils import set_stdin, set_username, set_command_prefix, send_chat, send_command
+from utils import set_stdin, send_chat, send_command
 
 # ── 加载配置 ──
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -43,9 +43,6 @@ logger = logging.getLogger("bot")
 
 
 def main():
-    set_username(USERNAME)
-    set_command_prefix(COMMAND_PREFIX)
-
     # ── 启动 Node.js Mineflayer 代理 ──
     node_script = os.path.join(os.path.dirname(__file__), "mineflayer_bot.js")
     logger.info(f"启动 Mineflayer 代理: {node_script}")
@@ -76,7 +73,7 @@ def main():
     print(f"  用户名: {USERNAME}")
     print(f"  在游戏内发送 {COMMAND_PREFIX}help 查看命令")
     print("=" * 50)
-    print("  输入消息按 Enter 发送 (以 / 开头执行命令，输入 quit 退出)")
+    print("  输入消息按 Enter 发送 (??开头执行Bot命令, /开头执行MC命令, quit 退出)")
 
     # ── 主循环: 读取 Node stdout 事件 + 处理控制台输入 ──
     running = True
@@ -106,11 +103,12 @@ def main():
 
             elif etype == "kicked":
                 logger.warning(f"被踢出: {event.get('reason', '')}")
-                running = False
 
             elif etype == "end":
                 logger.info(f"连接断开: {event.get('reason', '')}")
-                running = False
+
+            elif etype == "reconnecting":
+                logger.info(f"重连中... (第 {event.get('attempt', '?')} 次, {event.get('delay', 0)/1000:.0f}s 后)")
 
             elif etype == "error":
                 logger.error(f"Mineflayer 错误: {event.get('message', '')}")
@@ -137,7 +135,12 @@ def main():
             if line.lower() == "quit":
                 break
 
-            if line.startswith("/"):
+            if line.startswith(COMMAND_PREFIX):
+                command_line = line[len(COMMAND_PREFIX):].strip()
+                if command_line:
+                    print(f"  [BotCmd] {line}")
+                    CommandManager.process_command(command_line, "console")
+            elif line.startswith("/"):
                 send_command(line[1:])
                 print(f"  [Cmd] /{line[1:]}")
             else:

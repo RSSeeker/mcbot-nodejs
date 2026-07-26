@@ -8,7 +8,7 @@
 """
 
 from command_manager import Command
-from utils import send_chat, send_move, send_jump, send_stop, send_goto, send_follow
+from utils import send_whisper, send_move, send_jump, send_stop, send_goto, send_follow
 
 MOVE_DIRS = {
     "forward": "forward", "f": "forward",
@@ -20,41 +20,46 @@ MOVE_DIRS = {
 
 def _move_execute(conn, args: list[str], player: str):
     if not args:
-        send_chat("用法: ??move <forward/back/left/right> [时长毫秒]")
+        send_whisper(player, "用法: ??move <forward/back/left/right> [时长毫秒]")
         return
     dir_arg = args[0].lower()
     if dir_arg not in MOVE_DIRS:
-        send_chat(f"方向: forward/back/left/right")
+        send_whisper(player, "方向: forward/back/left/right")
         return
     duration = int(args[1]) if len(args) > 1 else 1000
     send_move(MOVE_DIRS[dir_arg], duration)
+    send_whisper(player, f"正在{dir_arg}移动 {duration}ms")
 
 
 def _jump_execute(conn, args: list[str], player: str):
     send_jump()
+    send_whisper(player, "已跳跃")
 
 
 def _stop_execute(conn, args: list[str], player: str):
     send_stop()
+    send_whisper(player, "已停止所有移动")
 
 
 def _goto_execute(conn, args: list[str], player: str):
     if len(args) < 3:
-        send_chat("用法: ??goto <x> <y> <z>")
+        send_whisper(player, "用法: ??goto <x> <y> <z>")
         return
     try:
         x, y, z = int(args[0]), int(args[1]), int(args[2])
     except ValueError:
-        send_chat("坐标需为整数")
+        send_whisper(player, "坐标需为整数")
         return
     send_goto(x, y, z)
+    send_whisper(player, f"正在寻路到 ({x}, {y}, {z})")
 
 
 def _follow_execute(conn, args: list[str], player: str):
     if not args:
-        send_chat("用法: ??follow <玩家名>")
+        send_whisper(player, "用法: ??follow <玩家名>")
         return
     send_follow(args[0])
+    send_whisper(player, f"正在跟随 {args[0]}")
 
 
 move_command = Command.literal("move").executes(_move_execute)

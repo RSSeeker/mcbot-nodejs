@@ -55,8 +55,8 @@ class CommandManager:
                     cmd.execute(None, args, player)
                 except Exception as e:
                     logger.error(f"执行命令 {main_cmd} 时出错: {e}")
-                    from utils import send_chat
-                    send_chat(f"命令执行失败: {e}")
+                    from utils import send_whisper
+                    send_whisper(player, f"命令执行失败: {e}")
                 return
 
         # 未找到命令

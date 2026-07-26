@@ -11,6 +11,7 @@ const mineflayer = require('mineflayer');
 const pathfinder = require('mineflayer-pathfinder').pathfinder;
 const Movements = require('mineflayer-pathfinder').Movements;
 const { GoalNear, GoalBlock, GoalFollow } = require('mineflayer-pathfinder').goals;
+const { Vec3 } = require('vec3');
 const fs = require('fs');
 const path = require('path');
 
@@ -45,16 +46,15 @@ let movements = null;
 let moveTimer = null;
 let activeMoveDir = null;
 let reconnectAttempts = 0;
+let bowTimer = null;                // 弓拉射定时器
 const MAX_RECONNECT_DELAY = 60000;   // 最长重连间隔 60 秒
 const BASE_RECONNECT_DELAY = 3000;   // 基础重连间隔 3 秒
 
 // ── 创建 Bot ──
 function createBot() {
     // 清理旧状态
-    if (moveTimer) {
-        clearTimeout(moveTimer);
-        moveTimer = null;
-    }
+    if (moveTimer) { clearTimeout(moveTimer); moveTimer = null; }
+    if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
     activeMoveDir = null;
     movements = null;
 
@@ -224,6 +224,23 @@ function startMove(dir, duration) {
     }
 }
 
+// 计算 bot 当前看向方块的哪个面（用于 placeBlock）
+function getTargetFace(block) {
+    const eyePos = bot.entity.position.offset(0, bot.entity.height, 0);
+    const bx = block.position.x + 0.5;
+    const by = block.position.y + 0.5;
+    const bz = block.position.z + 0.5;
+    const dx = eyePos.x - bx;
+    const dy = eyePos.y - by;
+    const dz = eyePos.z - bz;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    const absDz = Math.abs(dz);
+    if (absDx >= absDy && absDx >= absDz) return new Vec3(Math.sign(dx), 0, 0);
+    if (absDy >= absDx && absDy >= absDz) return new Vec3(0, Math.sign(dy), 0);
+    return new Vec3(0, 0, Math.sign(dz));
+}
+
 // ═══════════════════════════════════
 //  Python 指令 → Mineflayer
 // ═══════════════════════════════════
@@ -316,33 +333,127 @@ rl.on('line', (line) => {
                 logInfo(`[Follow] ${data.player} distance=${data.distance || 2}`);
                 break;
 
-            case 'leftclick':
-                // 左键（攻击实体 / 挖掘方块）
-                bot.swingArm('left');
-                const entity = bot.entityAtCursor();
-                if (entity) {
-                    bot.attack(entity).catch(err => logInfo(`[LeftClick] 攻击失败: ${err.message}`));
-                    logInfo('[LeftClick] 攻击实体');
+            case 'look':
+                // 转动视角: {type:"look", yaw:180, pitch:0}
+                // 看向玩家: {type:"look", player:"xxx"}
+                // 看向坐标: {type:"look", x:100, y:64, z:200}
+                if (data.player) {
+                    const lookTarget = bot.players[data.player];
+                    if (!lookTarget || !lookTarget.entity) {
+                        logInfo(`[Look] 找不到玩家: ${data.player}`);
+                        break;
+                    }
+                    bot.lookAt(lookTarget.entity.position.offset(0, 1.6, 0));
+                    logInfo(`[Look] 看向玩家 ${data.player}`);
+                } else if (data.x !== undefined) {
+                    bot.lookAt(new Vec3(data.x, data.y + 0.5 || 0.5, data.z));
+                    logInfo(`[Look] 看向坐标 ${data.x} ${data.y} ${data.z}`);
                 } else {
-                    const block = bot.blockAtCursor();
-                    if (!block) {
-                        logInfo('[LeftClick] 无目标');
+                    const yaw = data.yaw != null ? data.yaw : 0;
+                    const pitch = data.pitch != null ? data.pitch : 0;
+                    bot.look(yaw, pitch);
+                    logInfo(`[Look] yaw=${yaw.toFixed(1)} pitch=${pitch.toFixed(1)}`);
+                }
+                break;
+
+            case 'leftclick':
+                // 左键（攻击实体 / 挖掘方块 / 仅挥臂）
+                bot.swingArm('left');
+                const lEntity = bot.entityAtCursor();
+                if (lEntity) {
+                    bot.attack(lEntity).catch(err => logInfo(`[LeftClick] 攻击失败: ${err.message}`));
+                    logInfo(`[LeftClick] 攻击实体 ${lEntity.name || lEntity.username || '?'}`);
+                } else {
+                    const lBlock = bot.blockAtCursor();
+                    if (!lBlock) {
+                        logInfo('[LeftClick] 无目标（仅挥臂）');
                         break;
                     }
                     const isCreative = bot.game && bot.game.gameMode === 'creative';
-                    if (isCreative || bot.canDigBlock(block)) {
-                        bot.dig(block).catch(err => logInfo(`[LeftClick] 挖掘失败: ${err.message}`));
-                        logInfo(`[LeftClick] 挖掘 ${block.name}`);
+                    if (isCreative || bot.canDigBlock(lBlock)) {
+                        bot.dig(lBlock).catch(err => logInfo(`[LeftClick] 挖掘失败: ${err.message}`));
+                        logInfo(`[LeftClick] 挖掘 ${lBlock.name}`);
                     } else {
-                        logInfo(`[LeftClick] 无法挖掘 ${block.name} (保护或冒险模式)`);
+                        logInfo(`[LeftClick] 无法挖掘 ${lBlock.name}（保护或冒险模式）`);
                     }
                 }
                 break;
 
             case 'rightclick':
-                // 右键（使用物品/放置方块/交互）
-                bot.activateItem();
-                logInfo('[RightClick]');
+                // 右键（放置方块→激活方块→激活实体→骑乘→使用物品）
+                const rBlock = bot.blockAtCursor();
+                if (rBlock) {
+                    // 优先尝试放置方块（放置在看向的面）
+                    const face = getTargetFace(rBlock);
+                    bot.placeBlock(rBlock, face)
+                        .then(() => logInfo('[RightClick] 方块已放置'))
+                        .catch(() => {
+                            // 放置失败，尝试激活方块（开门/开箱/拉杆等）
+                            bot.activateBlock(rBlock)
+                                .then(() => logInfo(`[RightClick] 激活方块 ${rBlock.name}`))
+                                .catch(() => tryEntityOrUse());
+                        });
+                } else {
+                    tryEntityOrUse();
+                }
+
+                function tryEntityOrUse() {
+                    const rEntity = bot.entityAtCursor();
+                    if (rEntity) {
+                        // 激活实体（村民交易、骑马、上船等）
+                        bot.activateEntity(rEntity)
+                            .then(() => logInfo(`[RightClick] 与实体交互: ${rEntity.name || rEntity.username || '?'}`))
+                            .catch(err => logInfo(`[RightClick] 实体交互失败: ${err.message}`));
+                        return;
+                    }
+                    useHeldItem();
+                }
+
+                function useHeldItem() {
+                    const item = bot.heldItem;
+                    if (item && item.name === 'crossbow') {
+                        // 弩：检测是否已上膛
+                        const charged = item.nbt?.value?.Charged?.value;
+                        if (charged) {
+                            bot.activateItem();
+                            logInfo('[RightClick] 弩箭已射出');
+                        } else {
+                            bot.activateItem();
+                            logInfo('[RightClick] 弩开始上弹...');
+                        }
+                        return;
+                    }
+                    bot.activateItem();
+                    if (item && item.name === 'bow') {
+                        // 弓：拉弓→释放射出
+                        if (bowTimer) clearTimeout(bowTimer);
+                        bowTimer = setTimeout(() => {
+                            bot.deactivateItem();
+                            logInfo('[RightClick] 弓箭已射出');
+                            bowTimer = null;
+                        }, 1200);
+                    } else {
+                        logInfo('[RightClick]');
+                    }
+                }
+                break;
+
+            case 'cancel':
+                // 取消所有按住的操作（停止挖掘/使用物品/弓箭/移动）
+                // 停止挖掘
+                try { bot.stopDigging(); } catch (e) {}
+                // 停止使用物品（拉弓、吃东西等）
+                try { bot.deactivateItem(); } catch (e) {}
+                // 清除弓箭定时器
+                if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
+                // 停止移动
+                stopMove();
+                // 释放所有方向键
+                ['forward', 'back', 'left', 'right', 'jump', 'sneak'].forEach(dir => {
+                    try { bot.setControlState(dir, false); } catch (e) {}
+                });
+                activeMoveDir = null;
+                logInfo('[Cancel] 已取消所有操作');
                 break;
 
             case 'sneak':
@@ -401,6 +512,90 @@ rl.on('line', (line) => {
                     const itemName = item ? `${item.name} x${item.count}` : '空';
                     logInfo(`[Slot] 切换到格子${slotIdx + 1}: ${itemName}`);
                 }
+                break;
+
+            // ── 直接使用物品 ──
+            case 'activate_item':
+                bot.activateItem();
+                logInfo('[ActivateItem]');
+                break;
+
+            case 'deactivate_item':
+                bot.deactivateItem();
+                logInfo('[DeactivateItem]');
+                break;
+
+            // ── 装备物品 ──
+            case 'equip':
+                (async () => {
+                    const equipItem = bot.inventory.items().find(i => i.name.includes(data.item));
+                    if (!equipItem) {
+                        logInfo(`[Equip] 找不到物品: ${data.item}`);
+                        return;
+                    }
+                    try {
+                        await bot.equip(equipItem, data.destination || 'hand');
+                        logInfo(`[Equip] ${equipItem.name} → ${data.destination || 'hand'}`);
+                    } catch (err) {
+                        logInfo(`[Equip] 失败: ${err.message}`);
+                    }
+                })();
+                break;
+
+            // ── 骑乘 / 下马 ──
+            case 'mount':
+                (async () => {
+                    const mountEntity = bot.entityAtCursor()
+                        || bot.nearestEntity(e => e.objectType === 'Vehicle'
+                            || ['boat', 'minecart', 'horse', 'donkey', 'mule', 'pig', 'strider', 'llama'].includes(e.name));
+                    if (mountEntity) {
+                        try {
+                            await bot.mount(mountEntity);
+                            logInfo(`[Mount] 已骑乘 ${mountEntity.name || '?'}`);
+                        } catch (err) {
+                            logInfo(`[Mount] 失败: ${err.message}`);
+                        }
+                    } else {
+                        logInfo('[Mount] 无目标');
+                    }
+                })();
+                break;
+
+            case 'dismount':
+                (async () => {
+                    try {
+                        await bot.dismount();
+                        logInfo('[Dismount] 已下马');
+                    } catch (err) {
+                        logInfo(`[Dismount] 失败: ${err.message}`);
+                    }
+                })();
+                break;
+
+            // ── 通用控制状态 ──
+            case 'set_control_state':
+                bot.setControlState(data.control, data.state);
+                logInfo(`[Control] ${data.control}=${data.state}`);
+                break;
+
+            // ── 状态查询 ──
+            case 'status':
+                (() => {
+                    const pos = bot.entity.position;
+                    sendJson({
+                        type: 'status_response',
+                        position: { x: Math.round(pos.x * 100) / 100, y: Math.round(pos.y * 100) / 100, z: Math.round(pos.z * 100) / 100 },
+                        health: bot.health,
+                        food: bot.food,
+                        yaw: Math.round(bot.entity.yaw * 100) / 100,
+                        pitch: Math.round(bot.entity.pitch * 100) / 100,
+                        gamemode: bot.game ? bot.game.gameMode : null,
+                        dimension: bot.game ? bot.game.dimension : null,
+                        heldItem: bot.heldItem ? { name: bot.heldItem.name, count: bot.heldItem.count } : null,
+                        isSneaking: bot.getControlState('sneak'),
+                        isSprinting: bot.getControlState('sprint'),
+                    });
+                })();
                 break;
 
             default:
