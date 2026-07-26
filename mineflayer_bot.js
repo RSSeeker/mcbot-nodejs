@@ -46,6 +46,7 @@ let movements = null;
 let moveTimer = null;
 let activeMoveDir = null;
 let reconnectAttempts = 0;
+let reconnectTimer = null;          // 防重复：同一时刻只允许一个重连定时器存在
 let bowTimer = null;                // 弓拉射定时器
 const MAX_RECONNECT_DELAY = 60000;   // 最长重连间隔 60 秒
 const BASE_RECONNECT_DELAY = 3000;   // 基础重连间隔 3 秒
@@ -55,6 +56,7 @@ function createBot() {
     // 清理旧状态
     if (moveTimer) { clearTimeout(moveTimer); moveTimer = null; }
     if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     activeMoveDir = null;
     movements = null;
 
@@ -77,6 +79,7 @@ function createBot() {
     bot.on('login', () => {
         logInfo(`已登录: ${username}`);
         reconnectAttempts = 0;  // 成功登录后重置重连计数
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         sendJson({
             type: 'login',
             status: 'success',
@@ -129,8 +132,8 @@ function createBot() {
         const text = typeof reason === 'string' ? reason : JSON.stringify(reason);
         logInfo(`被踢: ${text}`);
         sendJson({ type: 'kicked', reason: text });
-        // 被踢后等待 5 秒再重连
-        setTimeout(tryReconnect, 5000);
+        // 被踢后至少额外等待 5 秒，防止频繁重连被 ban
+        scheduleReconnect(5000);
     });
 
     // 死亡
@@ -150,7 +153,7 @@ function createBot() {
     bot.on('end', (reason) => {
         logInfo(`连接断开: ${reason}`);
         sendJson({ type: 'end', reason: reason });
-        tryReconnect();
+        scheduleReconnect();
     });
 
     // 错误
@@ -181,13 +184,24 @@ function createBot() {
     return bot;
 }
 
-// ── 自动重连 ──
-function tryReconnect() {
+// ── 自动重连（单一定时器，防重复触发） ──
+function scheduleReconnect(extraDelayMs = 0) {
+    // 如果已有重连定时器在执行，忽略本次调用（防 end+kicked 双重触发）
+    if (reconnectTimer) {
+        logInfo(`重连已调度，跳过重复请求`);
+        return;
+    }
+
     reconnectAttempts++;
-    const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
-    logInfo(`将在 ${(delay / 1000).toFixed(1)} 秒后尝试重连 (第 ${reconnectAttempts} 次)...`);
-    sendJson({ type: 'reconnecting', attempt: reconnectAttempts, delay: delay });
-    setTimeout(() => {
+    // 指数退避: min(3s * 2^(n-1), 60s) + 额外延迟
+    const backoff = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
+    const delay = backoff + extraDelayMs;
+
+    logInfo(`将在 ${(delay / 1000).toFixed(1)} 秒后重连 (第 ${reconnectAttempts} 次, backoff=${backoff}ms, extra=${extraDelayMs}ms)...`);
+    sendJson({ type: 'reconnecting', attempt: reconnectAttempts, delay });
+
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
         logInfo(`正在重连...`);
         createBot();
     }, delay);

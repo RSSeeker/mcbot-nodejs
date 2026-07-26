@@ -17,7 +17,7 @@ logger = logging.getLogger("bot")
 
 # 测试项列表: (名称, 间隔秒数)
 _TESTS: list[tuple[str, float]] = [
-    ("公聊消息", 0.0),
+    ("私聊消息", 0.0),
     ("前进移动", 1.8),
     ("后退移动", 1.2),
     ("跳跃", 0.0),
@@ -45,7 +45,7 @@ def _run_test(player: str):
 
     for name, cooldown in _TESTS:
         try:
-            if name == "公聊消息":
+            if name == "私聊消息":
                 send_whisper(player, "test: 私聊测试")
             elif name == "前进移动":
                 send_move("forward", 1500)

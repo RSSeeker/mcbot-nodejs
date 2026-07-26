@@ -6,6 +6,7 @@ from .restart_command import restart_command
 from .move_command import move_command, jump_command, stop_command, goto_command, follow_command
 from .action_command import leftclick_command, rightclick_command, look_command, cancel_command, sneak_command, drop_command, dropall_command, slot_command
 from .test_command import test_command
+from .ping_command import ping_command
 
 
 def register_all():
@@ -29,4 +30,5 @@ def register_all():
     CommandManager.register(drop_command)
     CommandManager.register(dropall_command)
     CommandManager.register(test_command)
+    CommandManager.register(ping_command)
     CommandManager.register(slot_command)
