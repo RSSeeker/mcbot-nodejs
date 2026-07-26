@@ -15,6 +15,7 @@ bot_controller.py — Bot 控制统一 API
 
 import json
 import logging
+import math
 import os
 import subprocess
 import threading
@@ -347,7 +348,9 @@ class BotController:
             yaw: 水平角度 (-180~180)
             pitch: 垂直角度 (-90~90)
         """
-        send_look(yaw=yaw, pitch=pitch)
+        yaw_rad = math.radians(yaw)
+        pitch_rad = math.radians(pitch)
+        send_look(yaw=yaw_rad, pitch=pitch_rad)
 
     def look_at_player(self, player: str):
         """看向指定玩家"""

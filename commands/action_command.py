@@ -60,6 +60,8 @@ def _cancel_execute(conn, args: list[str], player: str):
     send_whisper(player, "已取消所有操作")
 
 
+import math
+
 def _look_execute(conn, args: list[str], player: str):
     if not args:
         send_whisper(player, "用法: **look <偏航> [俯仰]  或  **look at <玩家>")
@@ -72,12 +74,14 @@ def _look_execute(conn, args: list[str], player: str):
         send_whisper(player, f"正在看向 {args[1]}")
         return
     try:
-        yaw = float(args[0])
-        pitch = float(args[1]) if len(args) > 1 else 0.0
+        yaw_deg = float(args[0])
+        pitch_deg = float(args[1]) if len(args) > 1 else 0.0
     except ValueError:
         send_whisper(player, "角度必须是数字，如 **look 90 0")
         return
-    send_look(yaw=yaw, pitch=pitch)
+    yaw_rad = math.radians(yaw_deg)
+    pitch_rad = math.radians(pitch_deg)
+    send_look(yaw=yaw_rad, pitch=pitch_rad)
 
 
 leftclick_command = Command.literal("leftclick").executes(_leftclick_execute)
