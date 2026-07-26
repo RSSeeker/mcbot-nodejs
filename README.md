@@ -47,14 +47,14 @@ mcbot-python/
 ├── ping_server.py        # 独立工具：探测服务器版本和在线人数
 ├── commands/
 │   ├── __init__.py         # 命令注册入口
-│   ├── help_command.py     # ??help — 列出所有命令
-│   ├── send_command.py     # ??send — 让 Bot 发送消息
-│   ├── cmd_command.py      # ??cmd  — 执行 Minecraft 指令
-│   ├── respawn_command.py  # ??respawn — 让 Bot 重生
-│   ├── restart_command.py  # ??restart — 重启 Bot 进程
-│   ├── move_command.py     # ??move/jump/stop/goto/follow — 移动控制
-│   ├── action_command.py   # ??leftclick/rightclick/sneak/drop/dropall/slot/look/cancel
-│   └── test_command.py     # ??test — 运行功能测试
+│   ├── help_command.py     # **help — 列出所有命令
+│   ├── send_command.py     # **send — 让 Bot 发送消息
+│   ├── cmd_command.py      # **cmd  — 执行 Minecraft 指令
+│   ├── respawn_command.py  # **respawn — 让 Bot 重生
+│   ├── restart_command.py  # **restart — 重启 Bot 进程
+│   ├── move_command.py     # **move/jump/stop/goto/follow — 移动控制
+│   ├── action_command.py   # **leftclick/rightclick/sneak/drop/dropall/slot/look/cancel — 动作交互
+│   └── test_command.py     # **test — 运行功能测试
 ├── config.json             # 配置文件（服务器/用户名/密码/指令前缀）
 ├── config.example.json     # 配置文件模板
 ├── requirements.txt        # Python 依赖
