@@ -15,19 +15,24 @@ const { Vec3 } = require('vec3');
 const fs = require('fs');
 const path = require('path');
 
-// ── 加载配置 ──
+// ── 配置（支持从 Python 动态传入）──
+let host = '';
+let port = 25565;
+let username = '';
+let password = '';
+let gameVersion = '1.21.4';
+
+// 从配置文件读取默认值
 const configPath = path.join(__dirname, 'config.json');
-const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-
-const host = config.server.host;
-const port = config.server.port;
-const username = config.bot.username;
-const password = config.bot.password || '';
-const gameVersion = config.server.version || '1.21.4';
-
-if (!host || !username) {
-    console.error('config.json 缺少 server.host 或 bot.username');
-    process.exit(1);
+try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    host = config.server.host;
+    port = config.server.port;
+    username = config.bot.username;
+    password = config.bot.password || '';
+    gameVersion = config.server.version || '1.21.4';
+} catch (e) {
+    logInfo('无法读取配置文件，将等待 Python 传入配置');
 }
 
 // ── JSON 输出辅助 ──
@@ -171,12 +176,16 @@ function createBot() {
         movements = new Movements(bot);
         bot.pathfinder.setMovements(movements);
 
-        // 自动登录
+        // 自动注册并登录
         if (!autoLoginDone && password) {
             autoLoginDone = true;
             setTimeout(() => {
-                bot.chat(`/login ${password}`);
-                logInfo(`已自动执行 /login`);
+                bot.chat(`/register ${password} ${password}`);
+                logInfo(`已自动执行 /register`);
+                setTimeout(() => {
+                    bot.chat(`/login ${password}`);
+                    logInfo(`已自动执行 /login`);
+                }, 1500);
             }, 1000);
         }
     });
@@ -207,8 +216,24 @@ function scheduleReconnect(extraDelayMs = 0) {
     }, delay);
 }
 
-// ── 首次启动 ──
-createBot();
+// ── 首次启动（延迟到收到 connect 命令）──
+let initialized = false;
+
+function tryInitialize() {
+    if (initialized) return;
+    if (!host || !username) {
+        logInfo('等待 Python 传入连接配置...');
+        return;
+    }
+    initialized = true;
+    logInfo(`初始化完成: ${username} @ ${host}:${port} (${gameVersion})`);
+    createBot();
+}
+
+// 如果配置文件已提供完整配置，立即启动
+if (host && username) {
+    setTimeout(tryInitialize, 100);
+}
 
 // ═══════════════════════════════════
 //  移动辅助函数
@@ -273,6 +298,17 @@ rl.on('line', (line) => {
 
     try {
         switch (data.type) {
+            case 'connect':
+                // 动态更新连接配置
+                host = data.host || host;
+                port = parseInt(data.port) || port;
+                username = data.username || username;
+                password = data.password || password;
+                gameVersion = data.version || gameVersion;
+                logInfo(`[Connect] 配置更新: ${username} @ ${host}:${port} (${gameVersion})`);
+                tryInitialize();
+                break;
+
             case 'chat':
                 bot.chat(data.message);
                 logInfo(`[Chat] ${data.message}`);

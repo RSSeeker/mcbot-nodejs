@@ -39,14 +39,47 @@ class BotController:
 
     使用示例::
 
+        # 使用配置文件
         bot = BotController()
         bot.connect()
         bot.chat("Hello!")
-        bot.move_forward(3000)
         bot.disconnect()
+
+        # 直接指定参数
+        bot = BotController(
+            host="mc.hypixel.net",
+            port=25565,
+            username="MyBot",
+            password="mypassword",
+            command_prefix="!!"
+        )
+        bot.connect()
     """
 
-    def __init__(self, config_path: str | None = None):
+    def __init__(
+        self,
+        config_path: str | None = None,
+        *,
+        host: str | None = None,
+        port: int | None = None,
+        version: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+        command_prefix: str | None = None
+    ):
+        """
+        初始化 Bot 控制器
+
+        Args:
+            config_path: 配置文件路径，默认读取 config.json
+            host: 服务器地址（覆盖配置文件）
+            port: 服务器端口（覆盖配置文件）
+            version: Minecraft 版本（覆盖配置文件）
+            username: Bot 玩家名（覆盖配置文件）
+            password: 登录密码（覆盖配置文件）
+            command_prefix: 命令前缀（覆盖配置文件）
+        """
+        # 加载配置文件作为默认值
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "config.json")
         with open(config_path, "r", encoding="utf-8") as f:
@@ -59,11 +92,13 @@ class BotController:
         self._event_handlers: dict[str, list] = {}
         self._event_lock = threading.Lock()
 
-        self.host = self._cfg["server"]["host"]
-        self.port = self._cfg["server"]["port"]
-        self.version = self._cfg["server"].get("version", "1.21.4")
-        self.username = self._cfg["bot"]["username"]
-        self.password = self._cfg["bot"].get("password", "")
+        # 使用参数覆盖配置文件
+        self.host = host if host is not None else self._cfg["server"]["host"]
+        self.port = port if port is not None else self._cfg["server"]["port"]
+        self.version = version if version is not None else self._cfg["server"].get("version", "1.21.4")
+        self.username = username if username is not None else self._cfg["bot"]["username"]
+        self.password = password if password is not None else self._cfg["bot"].get("password", "")
+        self.command_prefix = command_prefix if command_prefix is not None else self._cfg.get("command_prefix", "??")
 
     # ═══════════════════════════════════
     #  生命周期
@@ -102,6 +137,9 @@ class BotController:
         # 后台读取 stdout
         threading.Thread(target=self._read_stdout, daemon=True).start()
 
+        # 发送连接配置给 Node 进程
+        self._send_connect_config()
+
         # 等待进程启动
         start = time.time()
         while time.time() - start < timeout:
@@ -109,8 +147,31 @@ class BotController:
                 raise RuntimeError("Bot 进程意外退出")
             time.sleep(0.5)
 
-        logger.info("Bot 控制器已就绪 ✓")
+        # 更新全局状态（用于命令前缀匹配等）
+        from utils import set_username, set_command_prefix
+        set_username(self.username)
+        set_command_prefix(self.command_prefix)
+
+        logger.info(f"Bot 控制器已就绪 ✓ 连接到 {self.host}:{self.port}")
         return self
+
+    def _send_connect_config(self):
+        """向 Node 进程发送连接配置"""
+        connect_config = {
+            "type": "connect",
+            "host": self.host,
+            "port": self.port,
+            "version": self.version,
+            "username": self.username,
+            "password": self.password,
+        }
+        try:
+            line = json.dumps(connect_config, ensure_ascii=False) + "\n"
+            self._proc.stdin.write(line)
+            self._proc.stdin.flush()
+            logger.info(f"已发送连接配置: {self.host}:{self.port}")
+        except Exception as e:
+            logger.error(f"发送连接配置失败: {e}")
 
     def disconnect(self):
         """断开连接，关闭 Bot 进程"""

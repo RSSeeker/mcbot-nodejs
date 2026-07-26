@@ -170,9 +170,22 @@ python ping_server.py
 ```python
 from bot_controller import BotController
 
+# 方式1：使用配置文件
 bot = BotController()
 bot.connect()
 
+# 方式2：直接指定参数（覆盖配置文件）
+bot = BotController(
+    host="mc.hypixel.net",
+    port=25565,
+    version="1.21.4",
+    username="MyBot",
+    password="mypassword",
+    command_prefix="!!"
+)
+bot.connect()
+
+# 常用操作
 bot.chat("Hello!")               # 公聊
 bot.whisper("玩家名", "你好")      # 私聊
 bot.move_forward(3000)            # 前进 3 秒
@@ -194,6 +207,20 @@ bot.disconnect()
 with BotController() as bot:
     bot.chat("自动连接和断开")
 ```
+
+### BotController 参数说明
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `config_path` | str | 配置文件路径（默认 `config.json`） |
+| `host` | str | 服务器地址（覆盖配置文件） |
+| `port` | int | 服务器端口（覆盖配置文件） |
+| `version` | str | Minecraft 版本（覆盖配置文件） |
+| `username` | str | Bot 玩家名（覆盖配置文件） |
+| `password` | str | 登录密码（覆盖配置文件） |
+| `command_prefix` | str | 命令前缀（覆盖配置文件） |
+
+所有参数均为可选，如果不指定则使用 `config.json` 中的默认值。
 
 ## 依赖
 
