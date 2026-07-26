@@ -1,4 +1,4 @@
-"""??restart — 重启 Bot"""
+"""**restart — 重启 Bot"""
 import os
 import sys
 from command_manager import Command

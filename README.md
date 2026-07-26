@@ -26,12 +26,12 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 - **聊天监听与命令响应**：监听公聊/私聊消息，响应 `command_prefix` 开头的玩家指令
 - **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
 - **交互式控制台**：终端可直接发送聊天/Bot 命令/MC 指令
-- **WASD 移动 & 寻路**：方向移动、跳跃、坐标寻路、跟随玩家
-- **动作交互**：左键攻击/挖掘、右键使用/放置、潜行、丢物品、切格子、使用物品
+- **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
+- **动作交互**：左键攻击/挖掘、右键使用/放置、潜行、疾跑、丢物品、切格子、使用物品
 - **实体交互**：骑乘、下马、装备物品
 - **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品
 - **自动恢复**：死亡自动重生、断连自动重连（指数退避）
-- **测试命令**：游戏内 `**test` 运行 16 项自动化功能测试
+- **测试命令**：游戏内 `**test` 运行自定义测试（框架模式，用户可添加自己的测试）
 
 ## 项目结构
 
@@ -54,7 +54,7 @@ mcbot-python/
 │   ├── restart_command.py  # **restart — 重启 Bot 进程
 │   ├── move_command.py     # **move/jump/stop/goto/follow — 移动控制
 │   ├── action_command.py   # **leftclick/rightclick/sneak/drop/dropall/slot/look/cancel — 动作交互
-│   └── test_command.py     # **test — 运行功能测试
+│   └── test_command.py     # **test — 自定义测试框架
 ├── config.json             # 配置文件（服务器/用户名/密码/指令前缀）
 ├── config.example.json     # 配置文件模板
 ├── requirements.txt        # Python 依赖
@@ -94,7 +94,7 @@ npm install
         "username": "Bot名称",
         "password": "登录密码（无密码留空）"
     },
-    "command_prefix": "??"
+    "command_prefix": "**"
 }
 ```
 
@@ -153,13 +153,14 @@ python ping_server.py
 | `**leftclick` | 左键（攻击实体 / 挖掘方块） |
 | `**rightclick` | 右键（使用物品 / 放置方块 / 交互） |
 | `**sneak` | 切换潜行状态（蹲下/起身） |
+| `**sprint` | 切换疾跑状态 |
 | `**drop` | 丢出手持物品 |
 | `**dropall` | 丢出全部物品 |
 | `**slot <1-9>` | 切换到物品栏第 N 格 |
 | `**cancel` | 取消所有操作 |
 | `**respawn` | 重生 |
 | `**restart` | 重启 Bot 进程 |
-| `**test` | 运行 16 项功能测试 |
+| `**test` | 运行自定义测试（需在 test_command.py 中配置） |
 
 > 指令前缀通过 `config.json` 中的 `command_prefix` 修改。
 
@@ -194,6 +195,7 @@ bot.look(90, 0)                   # 设置视角
 bot.left_click()                  # 攻击
 bot.right_click()                 # 交互
 bot.sneak(True)                   # 蹲下
+bot.sprint(True)                   # 开始疾跑
 bot.switch_slot(1)                # 切第 1 格
 bot.drop()                        # 丢物品
 bot.equip("diamond_sword")        # 装备物品

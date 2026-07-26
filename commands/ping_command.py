@@ -1,4 +1,4 @@
-"""??ping [<ip>[:端口]] — 查询 Minecraft 服务器状态（私发反馈）"""
+"""**ping [<ip>[:端口]] — 查询 Minecraft 服务器状态（私发反馈）"""
 import json
 import os
 import threading

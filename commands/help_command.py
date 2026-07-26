@@ -1,4 +1,4 @@
-"""??help — 列出所有已注册命令"""
+"""**help — 列出所有已注册命令"""
 from command_manager import Command, CommandManager
 from utils import send_whisper
 

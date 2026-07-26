@@ -15,10 +15,10 @@ try:
     with open(_CFG_PATH, "r", encoding="utf-8") as _f:
         _init_cfg = json.load(_f)
     _bot_username = _init_cfg.get("bot", {}).get("username", "")
-    _command_prefix = _init_cfg.get("command_prefix", "??")
+    _command_prefix = _init_cfg.get("command_prefix", "**")
 except Exception:
     _bot_username = ""
-    _command_prefix = "??"
+    _command_prefix = "**"
 
 # 全局状态
 _bot_stdin = sys.stdin  # Node 子进程的 stdin（实际写入用）
@@ -42,7 +42,7 @@ def get_username() -> str:
 
 
 def set_command_prefix(prefix: str):
-    """设置指令前缀（如 ??、!、/ 等）"""
+    """设置指令前缀（如 **、!、/ 等）"""
     global _command_prefix
     _command_prefix = prefix
 

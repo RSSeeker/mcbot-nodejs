@@ -1,4 +1,4 @@
-"""??respawn — 让 Bot 重生"""
+"""**respawn — 让 Bot 重生"""
 from command_manager import Command
 from utils import send_respawn, send_whisper
 

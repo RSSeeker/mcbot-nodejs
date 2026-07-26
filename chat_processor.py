@@ -1,6 +1,6 @@
 """
 chat_processor.py — 解析 Minecraft 聊天 JSON，提取玩家名和消息，
-检测 ??command 并路由到 CommandManager。
+检测 **command 并路由到 CommandManager。
 """
 
 import json
@@ -146,7 +146,7 @@ def _render_ansi(component, inherited_color: str | None = None) -> str:
 def process_chat(raw_content):
     """
     处理聊天内容：JSON 聊天组件 或 NBT 提取的纯文本。
-    打印到终端 → 提取纯文本 → 检测 ??command。
+    打印到终端 → 提取纯文本 → 检测 **command。
     """
     plain = ""  # 提取的纯文本
 

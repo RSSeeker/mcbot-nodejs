@@ -499,7 +499,7 @@ rl.on('line', (line) => {
                 // 停止移动
                 stopMove();
                 // 释放所有方向键
-                ['forward', 'back', 'left', 'right', 'jump', 'sneak'].forEach(dir => {
+                ['forward', 'back', 'left', 'right', 'jump', 'sneak', 'sprint'].forEach(dir => {
                     try { bot.setControlState(dir, false); } catch (e) {}
                 });
                 activeMoveDir = null;

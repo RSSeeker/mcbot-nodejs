@@ -1,10 +1,10 @@
 """
 移动相关命令:
-  ??move <方向> [时长]  — 基本 WASD 移动（forward/back/left/right）
-  ??jump              — 跳跃
-  ??stop              — 停止所有移动
-  ??goto <x> <y> <z>  — 寻路到坐标
-  ??follow <玩家>     — 跟随玩家
+  **move <方向> [时长]  — 基本 WASD 移动（forward/back/left/right）
+  **jump              — 跳跃
+  **stop              — 停止所有移动
+  **goto <x> <y> <z>  — 寻路到坐标
+  **follow <玩家>     — 跟随玩家
 """
 
 from command_manager import Command
@@ -20,7 +20,7 @@ MOVE_DIRS = {
 
 def _move_execute(conn, args: list[str], player: str):
     if not args:
-        send_whisper(player, "用法: ??move <forward/back/left/right> [时长毫秒]")
+        send_whisper(player, "用法: **move <forward/back/left/right> [时长毫秒]")
         return
     dir_arg = args[0].lower()
     if dir_arg not in MOVE_DIRS:
@@ -43,7 +43,7 @@ def _stop_execute(conn, args: list[str], player: str):
 
 def _goto_execute(conn, args: list[str], player: str):
     if len(args) < 3:
-        send_whisper(player, "用法: ??goto <x> <y> <z>")
+        send_whisper(player, "用法: **goto <x> <y> <z>")
         return
     try:
         x, y, z = int(args[0]), int(args[1]), int(args[2])
@@ -56,7 +56,7 @@ def _goto_execute(conn, args: list[str], player: str):
 
 def _follow_execute(conn, args: list[str], player: str):
     if not args:
-        send_whisper(player, "用法: ??follow <玩家名>")
+        send_whisper(player, "用法: **follow <玩家名>")
         return
     send_follow(args[0])
     send_whisper(player, f"正在跟随 {args[0]}")

@@ -1,7 +1,7 @@
 """
 main.py — mcbot Python 入口
 =============================
-启动 Mineflayer Node.js 代理 → 监听事件 → 响应 ??command
+启动 Mineflayer Node.js 代理 → 监听事件 → 响应 **command
 
 用法:
     python main.py
@@ -32,7 +32,7 @@ SERVER_PORT = _cfg["server"]["port"]
 SERVER_VERSION = _cfg["server"].get("version", "1.21.4")
 USERNAME = _cfg["bot"]["username"]
 PASSWORD = _cfg["bot"].get("password", "")
-COMMAND_PREFIX = _cfg.get("command_prefix", "??")
+COMMAND_PREFIX = _cfg.get("command_prefix", "**")
 
 # ── 日志 ──
 logging.basicConfig(
@@ -73,7 +73,7 @@ def main():
     print(f"  用户名: {USERNAME}")
     print(f"  在游戏内发送 {COMMAND_PREFIX}help 查看命令")
     print("=" * 50)
-    print("  输入消息按 Enter 发送 (??开头执行Bot命令, /开头执行MC命令, quit 退出)")
+    print("  输入消息按 Enter 发送 (**开头执行Bot命令, /开头执行MC命令, quit 退出)")
 
     # ── 主循环: 读取 Node stdout 事件 + 处理控制台输入 ──
     running = True

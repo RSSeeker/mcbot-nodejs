@@ -182,6 +182,18 @@ def test_sneak(bot):
     bot.sneak()  # 切回
 
 
+@test("疾跑切换")
+def test_sprint(bot):
+    """疾跑开关"""
+    bot.sprint(True)
+    time.sleep(0.5)
+    bot.sprint(False)
+    time.sleep(0.3)
+    bot.sprint()  # 切换模式
+    time.sleep(0.3)
+    bot.sprint()  # 切回
+
+
 @test("取消操作")
 def test_cancel(bot):
     """取消所有操作"""
@@ -268,6 +280,7 @@ ALL_TESTS = [
     test_look,
     test_look_at,
     test_sneak,
+    test_sprint,
     test_cancel,
     test_switch_slot,
     test_drop,
@@ -299,6 +312,7 @@ def run_interactive(bot: BotController):
     print("    bot.left_click()     — 左键")
     print("    bot.right_click()    — 右键")
     print("    bot.sneak()          — 潜行")
+    print("    bot.sprint()         — 疾跑")
     print("    bot.drop()           — 丢出物品")
     print("    bot.switch_slot(n)   — 换格子")
     print("    bot.cancel()         — 取消操作")

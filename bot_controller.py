@@ -98,7 +98,7 @@ class BotController:
         self.version = version if version is not None else self._cfg["server"].get("version", "1.21.4")
         self.username = username if username is not None else self._cfg["bot"]["username"]
         self.password = password if password is not None else self._cfg["bot"].get("password", "")
-        self.command_prefix = command_prefix if command_prefix is not None else self._cfg.get("command_prefix", "??")
+        self.command_prefix = command_prefix if command_prefix is not None else self._cfg.get("command_prefix", "**")
 
     # ═══════════════════════════════════
     #  生命周期
@@ -319,6 +319,18 @@ class BotController:
             state: True=蹲下, False=起身, None=切换
         """
         send_sneak(state)
+
+    def sprint(self, state: bool | None = None):
+        """疾跑切换
+
+        Args:
+            state: True=开始疾跑, False=停止疾跑, None=切换
+        """
+        if state is None:
+            status = self.get_status()
+            current_sprint = status.get("isSprinting", False) if status else False
+            state = not current_sprint
+        send_set_control_state("sprint", state)
 
     def cancel(self):
         """取消所有操作（停止挖掘/使用物品/弓箭/移动）"""
