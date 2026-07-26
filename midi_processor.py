@@ -14,6 +14,7 @@ import threading
 import logging
 
 import mido
+from utils import send_command, send_suggestion
 
 logger = logging.getLogger("bot")
 
@@ -101,7 +102,7 @@ class MidiProcessor:
     _playing = False
 
     @classmethod
-    def play(cls, filepath: str, conn):
+    def play(cls, filepath: str):
         """开始播放 MIDI 文件"""
         cls.stop()
 
@@ -112,7 +113,7 @@ class MidiProcessor:
         cls._playing = True
         cls._play_thread = threading.Thread(
             target=cls._play_internal,
-            args=(filepath, conn),
+            args=(filepath,),
             daemon=True,
         )
         cls._play_thread.start()
@@ -126,10 +127,10 @@ class MidiProcessor:
             cls._play_thread = None
 
     @classmethod
-    def _play_internal(cls, filepath: str, conn):
+    def _play_internal(cls, filepath: str):
         try:
             # Step 0: 切换到 Unicode 模式
-            conn.send_chat_command("piano keyboard unicode")
+            send_command("piano keyboard unicode")
 
             mid = mido.MidiFile(filepath)
 
@@ -184,7 +185,7 @@ class MidiProcessor:
 
                 if e.unicode != 0:
                     text = "/// " + chr(e.unicode)
-                    conn.send_command_suggestion(transaction_id, text)
+                    send_suggestion(transaction_id, text)
                     transaction_id += 1
 
                 last_tick = e.tick

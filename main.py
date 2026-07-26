@@ -1,27 +1,28 @@
 """
 main.py — mcbot Python 入口
 =============================
-连接 Minecraft 服务器 → 监听聊天 → 响应 ??command → MIDI 播放
+启动 Mineflayer Node.js 代理 → 监听事件 → 响应 ??command → MIDI 播放
 
 用法:
-    cd mcbot-python/
-    pip install -r requirements.txt
     python main.py
 
 配置项（直接在下方修改）:
     SERVER_HOST     服务器地址
     USERNAME        Bot 用户名（离线模式）
-    PROTOCOL_VER    协议版本号（见 mc_protocol.py）
     MIDI_DIR        MIDI 文件存放目录
 """
 
+import json
 import logging
+import os
+import subprocess
+import sys
+import threading
 
-from mc_protocol import Connection
 from chat_processor import process_chat
 from command_manager import CommandManager
 from commands import register_all
-from utils import set_connection, set_username, send_chat, send_command
+from utils import set_stdin, set_username, send_chat, send_command
 
 # ── 配置 ──
 SERVER_HOST = "mc.weeaxe.cn"
@@ -36,63 +37,98 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bot")
 
-# ── 封包 ID 常量（协议版本 769 / 1.21.4） ──
-# 参考 minecraft-data 1.21.4 protocol.json (packet container mapper)
-SYSTEM_CHAT_PACKET_IDS = [0x73, 0x1E]  # system_chat, profileless_chat
-
 
 def main():
-    # 确保 midi 目录存在
-    import os
     os.makedirs(MIDI_DIR, exist_ok=True)
 
-    # 创建连接
-    conn = Connection(SERVER_HOST, SERVER_PORT)
-    set_connection(conn)
     set_username(USERNAME)
 
-    # 注册聊天处理器
-    def _on_system_chat(conn, pkt_id: int, data: bytes):
-        """处理聊天封包 (S→C 0x76=system_chat, 0x23=profileless_chat, 1.21.4, NBT 格式)
-           system_chat: anonymousNbt(content) + bool(isActionBar)
-           profileless_chat: anonymousNbt(message) + ChatType + name(NBT) + target(optional)"""
-        try:
-            from mc_protocol import decode_nbt_text
-            content, consumed = decode_nbt_text(data, 0)
-            if content:
-                process_chat(conn, content)
-        except Exception as e:
-            logger.error(f"解析聊天封包失败: {e}")
+    # ── 启动 Node.js Mineflayer 代理 ──
+    node_script = os.path.join(os.path.dirname(__file__), "mineflayer_bot.js")
+    logger.info(f"启动 Mineflayer 代理: {node_script}")
 
-    for chat_id in SYSTEM_CHAT_PACKET_IDS:
-        conn.on_packet(chat_id)(_on_system_chat)
+    bot_proc = subprocess.Popen(
+        ["node", node_script, SERVER_HOST, str(SERVER_PORT), USERNAME],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    set_stdin(bot_proc.stdin)
 
-    # 连接 + 登录
-    try:
-        conn.connect()
-        conn.login(USERNAME)
-    except Exception as e:
-        logger.error(f"登录失败: {e}")
-        conn.disconnect()
-        return
+    # ── 后台线程读取 stderr ──
+    def _read_stderr():
+        for line in bot_proc.stderr:
+            logger.info(line.strip())
 
-    # 注册命令
+    threading.Thread(target=_read_stderr, daemon=True).start()
+
+    # ── 注册命令 ──
     register_all()
 
-    logger.info("Bot 已就绪，等待命令...")
     print("=" * 50)
-    print("  mcbot-python 已启动")
+    print("  mcbot-python 已启动 (Mineflayer 代理)")
     print(f"  服务器: {SERVER_HOST}:{SERVER_PORT}")
     print(f"  用户名: {USERNAME}")
     print(f"  MIDI 目录: {MIDI_DIR}")
     print("  在游戏内发送 ??help 查看命令")
     print("=" * 50)
-
-    # 主循环 — 控制台直接输入发送到游戏
     print("  输入消息按 Enter 发送 (以 / 开头执行命令，输入 quit 退出)")
+
+    # ── 主循环: 读取 Node stdout 事件 + 处理控制台输入 ──
+    running = True
+
+    def _process_node_events():
+        """后台线程: 读取 Node 进程的 stdout JSON 事件"""
+        nonlocal running
+        for line in bot_proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                logger.info(f"[mineflayer] {line}")
+                continue
+
+            etype = event.get("type", "")
+            if etype == "message":
+                raw = event.get("raw", "")
+                try:
+                    json_obj = event.get("json")
+                    if json_obj:
+                        process_chat(json_obj)
+                except Exception as e:
+                    logger.error(f"处理消息失败: {e}")
+
+            elif etype == "kicked":
+                logger.warning(f"被踢出: {event.get('reason', '')}")
+                running = False
+
+            elif etype == "end":
+                logger.info(f"连接断开: {event.get('reason', '')}")
+                running = False
+
+            elif etype == "error":
+                logger.error(f"Mineflayer 错误: {event.get('message', '')}")
+
+            elif etype == "login":
+                logger.info("Bot 已登录 ✓")
+
+            elif etype == "spawn":
+                logger.info("Bot 已就绪，等待命令...")
+
+    event_thread = threading.Thread(target=_process_node_events, daemon=True)
+    event_thread.start()
+
     try:
-        while conn._running:
-            line = input()
+        while running and bot_proc.poll() is None:
+            try:
+                line = input()
+            except (EOFError, KeyboardInterrupt):
+                break
+
             line = line.strip()
             if not line:
                 continue
@@ -100,16 +136,24 @@ def main():
                 break
 
             if line.startswith("/"):
-                cmd = line[1:]
-                send_command(cmd)
-                print(f"  [Cmd] /{cmd}")
+                send_command(line[1:])
+                print(f"  [Cmd] /{line[1:]}")
             else:
                 send_chat(line)
                 print(f"  [Chat] {line}")
-    except (EOFError, KeyboardInterrupt):
-        pass
     finally:
-        conn.disconnect()
+        running = False
+        # 优雅关闭 Node 进程
+        try:
+            bot_proc.stdin.write('{"type":"quit"}\n')
+            bot_proc.stdin.flush()
+            bot_proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            bot_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            bot_proc.kill()
         logger.info("Bot 已停止")
 
 

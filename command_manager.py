@@ -41,7 +41,7 @@ class CommandManager:
         return list(cls._commands)
 
     @classmethod
-    def process_command(cls, conn, input_line: str, player: str):
+    def process_command(cls, input_line: str, player: str):
         """解析 ??xxx 并执行对应命令"""
         parts = _split_preserve_quotes(input_line)
         if not parts:
@@ -52,7 +52,7 @@ class CommandManager:
         for cmd in cls._commands:
             if cmd.name == main_cmd:
                 try:
-                    cmd.execute(conn, args, player)
+                    cmd.execute(None, args, player)
                 except Exception as e:
                     logger.error(f"执行命令 {main_cmd} 时出错: {e}")
                     from utils import send_chat

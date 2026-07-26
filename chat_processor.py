@@ -130,7 +130,7 @@ def _render_ansi(component, inherited_color: str | None = None) -> str:
 
 # ── 主处理入口 ──
 
-def process_chat(conn, raw_content):
+def process_chat(raw_content):
     """
     处理聊天内容：JSON 聊天组件 或 NBT 提取的纯文本。
     打印到终端 → 提取纯文本 → 检测 ??command。
@@ -165,26 +165,33 @@ def process_chat(conn, raw_content):
     if plain.strip():
         logger.info(f"[纯文本] {plain[:300]}")
 
-    # 优先尝试结构化提取（获取玩家名）
+    # 尝试从 plain 文本中提取发送者和消息
+    # 格式: [频道]发送者 >> 消息内容
+    import re
+    bot_name = get_username()
     player_name = ""
     chat_msg = ""
-    if plain.startswith("[玩家]") or plain.startswith("[地皮]"):
-        player_name, chat_msg = _extract_player_and_msg(content)
 
-    # 跳过 Bot 自己的消息
-    bot_name = get_username()
-    if bot_name and player_name == bot_name:
-        return
+    m = re.match(r'(?:\[.*?\]\s*)?(\w+)\s*>>\s*(.*)', plain)
+    if m:
+        player_name = m.group(1)
+        chat_msg = m.group(2).strip()
+        # 跳过 Bot 自己的消息
+        if bot_name and player_name == bot_name:
+            return
+    else:
+        # 尝试结构化提取 [玩家] / [地皮] 格式
+        if plain.startswith("[玩家]") or plain.startswith("[地皮]"):
+            player_name, chat_msg = _extract_player_and_msg(content)
+        if not chat_msg:
+            chat_msg = plain
 
-    # 如果结构化提取失败，从纯文本中检测 ??
-    if not (chat_msg and chat_msg.startswith("??")):
-        chat_msg = plain
-
-    if chat_msg and "??" in chat_msg:
-        idx = chat_msg.index("??")
-        command_line = chat_msg[idx + 2:].strip()
-        logger.info(f"[命令] {player_name}: {command_line}")
-        CommandManager.process_command(conn, command_line, player_name)
+    # 只响应以 ?? 开头的消息
+    if chat_msg and chat_msg.startswith("??"):
+        command_line = chat_msg[2:].strip()
+        if command_line:
+            logger.info(f"[命令] {player_name}: {command_line}")
+            CommandManager.process_command(command_line, player_name)
 
 
 def _extract_player_and_msg(content) -> tuple[str, str]:

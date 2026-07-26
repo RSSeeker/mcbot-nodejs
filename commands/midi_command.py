@@ -34,7 +34,7 @@ def _execute(conn, args: list[str], player: str):
             send_chat(f"Play failed: 文件 {filename} 不存在")
             return
         send_chat(f"开始播放: {filename}")
-        MidiProcessor.play(filepath, conn)
+        MidiProcessor.play(filepath)
 
     elif action == "stop":
         MidiProcessor.stop()

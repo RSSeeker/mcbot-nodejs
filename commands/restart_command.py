@@ -1,13 +1,12 @@
 """??restart — 重启 Bot"""
+import os
+import sys
 from command_manager import Command
 
 
 def _execute(conn, args: list[str], player: str):
-    # 断开当前连接
-    conn.disconnect()
-    # 用当前 Python 进程替换自身
-    import os
-    import sys
+    from utils import send_quit
+    send_quit()
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
