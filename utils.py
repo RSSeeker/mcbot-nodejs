@@ -108,3 +108,31 @@ def send_follow(player: str, distance: float = 2.0):
     """跟随指定玩家"""
     _send_json({"type": "follow", "player": player, "distance": distance})
     logger.info(f"[Bot → Follow] {player}")
+
+
+def send_leftclick():
+    """左键点击（攻击/挖掘）"""
+    _send_json({"type": "leftclick"})
+
+
+def send_rightclick():
+    """右键点击（使用物品/放置方块/交互）"""
+    _send_json({"type": "rightclick"})
+
+
+def send_sneak(state: bool | None = None):
+    """潜行切换: True=蹲下, False=起身, None=切换"""
+    _send_json({"type": "sneak", "state": state})
+    logger.info(f"[Bot → Sneak] {state}")
+
+
+def send_drop(drop_all: bool = False):
+    """丢出物品: drop_all=False 丢出手持, drop_all=True 丢出全部"""
+    _send_json({"type": "drop", "all": drop_all})
+    logger.info(f"[Bot → Drop] {'全部' if drop_all else '手持'}")
+
+
+def send_switch_slot(slot: int):
+    """切换物品栏: slot 1-9"""
+    _send_json({"type": "slot", "slot": slot})
+    logger.info(f"[Bot → Slot] {slot}")

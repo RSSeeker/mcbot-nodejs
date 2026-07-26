@@ -28,7 +28,9 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 - **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
 - **交互式控制台**：可直接从终端发送聊天消息或 Minecraft 命令
 - **WASD 移动 & 寻路**：支持方向移动、跳跃、坐标寻路、跟随玩家
+- **动作交互**：左键攻击/挖掘、右键使用/放置、潜行切换、物品丢出、物品栏切换
 - **Bot 重启**：游戏内 `??restart` 命令可重启整个进程
+- **自动恢复**：死亡自动重生、断连自动重连（指数退避）
 
 ## 项目结构
 
@@ -49,7 +51,8 @@ mcbot-python/
 │   ├── respawn_command.py # ??respawn — 让 Bot 重生
 │   ├── restart_command.py # ??restart — 重启 Bot 进程
 │   ├── midi_command.py    # ??midi  — MIDI 播放控制
-│   └── move_command.py    # ??move/jump/stop/goto/follow — 移动控制
+│   ├── move_command.py    # ??move/jump/stop/goto/follow — 移动控制
+│   └── action_command.py  # ??leftclick/rightclick/sneak/drop/dropall/slot — 动作交互
 ├── midi/                  # MIDI 文件存放目录
 ├── config.json            # 配置文件（服务器/用户名/密码/指令前缀）
 ├── config.example.json    # 配置文件模板
@@ -139,6 +142,12 @@ python ping_server.py
 | `??midi list` | 列出 MIDI 目录下的可用文件 |
 | `??midi play <文件名>` | 播放指定 MIDI 文件 |
 | `??midi stop` | 停止当前播放 |
+| `??leftclick` | 左键（攻击实体 / 挖掘方块） |
+| `??rightclick` | 右键（使用物品 / 放置方块 / 交互） |
+| `??sneak` | 切换潜行状态（蹲下/起身） |
+| `??drop` | 丢出手持物品 |
+| `??dropall` | 丢出背包中全部物品 |
+| `??slot <1-9>` | 切换到物品栏第 N 格 |
 
 > 指令前缀可通过 `config.json` 中的 `command_prefix` 修改。支持公聊和私聊两种触发方式。
 
