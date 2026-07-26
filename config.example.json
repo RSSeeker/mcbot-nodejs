@@ -8,5 +8,5 @@
         "username": "Bot名称",
         "password": "登录密码（无密码留空）"
     },
-    "command_prefix": "??"
+    "command_prefix": "**"
 }
