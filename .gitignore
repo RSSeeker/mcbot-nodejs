@@ -17,3 +17,4 @@ Thumbs.db
 # Project specific
 *.log
 midi/*.mid
+config.json

@@ -23,10 +23,11 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 ## 功能特性
 
 - **Mineflayer 协议代理**：由 Node.js Mineflayer 库处理所有 MC 协议细节，兼容多版本
-- **聊天监听与命令响应**：监听游戏公聊消息，响应以 `??` 开头的玩家指令
+- **聊天监听与命令响应**：监听游戏公聊和私聊消息，响应以可配置前缀（默认 `??`）开头的玩家指令
 - **MIDI 音乐播放**：解析 MIDI 文件，将音符映射为 Unicode 字符通过封包发送给钢琴插件播放
 - **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
 - **交互式控制台**：可直接从终端发送聊天消息或 Minecraft 命令
+- **WASD 移动 & 寻路**：支持方向移动、跳跃、坐标寻路、跟随玩家
 - **Bot 重启**：游戏内 `??restart` 命令可重启整个进程
 
 ## 项目结构
@@ -41,16 +42,19 @@ mcbot-python/
 ├── utils.py             # IPC 工具：send_chat/send_command/send_suggestion
 ├── ping_server.py       # 独立工具：探测服务器版本和在线人数
 ├── commands/
-│   ├── __init__.py       # 命令注册入口
-│   ├── help_command.py   # ??help — 列出所有命令
-│   ├── send_command.py   # ??send — 让 Bot 发送消息
-│   ├── cmd_command.py    # ??cmd  — 执行 Minecraft 指令
+│   ├── __init__.py        # 命令注册入口
+│   ├── help_command.py    # ??help — 列出所有命令
+│   ├── send_command.py    # ??send — 让 Bot 发送消息
+│   ├── cmd_command.py     # ??cmd  — 执行 Minecraft 指令
 │   ├── respawn_command.py # ??respawn — 让 Bot 重生
 │   ├── restart_command.py # ??restart — 重启 Bot 进程
-│   └── midi_command.py   # ??midi  — MIDI 播放控制
-├── midi/                 # MIDI 文件存放目录
-├── requirements.txt      # Python 依赖
-├── package.json          # Node.js 依赖
+│   ├── midi_command.py    # ??midi  — MIDI 播放控制
+│   └── move_command.py    # ??move/jump/stop/goto/follow — 移动控制
+├── midi/                  # MIDI 文件存放目录
+├── config.json            # 配置文件（服务器/用户名/密码/指令前缀）
+├── config.example.json    # 配置文件模板
+├── requirements.txt       # Python 依赖
+├── package.json           # Node.js 依赖
 └── README.md
 ```
 
@@ -73,13 +77,33 @@ npm install
 
 ### 配置
 
-编辑 `main.py` 中的配置项：
+复制 `config.example.json` 为 `config.json` 并编辑：
 
-```python
-SERVER_HOST = "mc.weeaxe.cn"   # 服务器地址
-SERVER_PORT = 25565             # 服务器端口
-USERNAME = "RS_Bot"             # Bot 用户名
+```json
+{
+    "server": {
+        "host": "服务器地址",
+        "port": 25565,
+        "version": "1.21.4"
+    },
+    "bot": {
+        "username": "Bot名称",
+        "password": "登录密码（无密码留空）"
+    },
+    "command_prefix": "??",
+    "midi_dir": "midi"
+}
 ```
+
+| 字段 | 说明 |
+|------|------|
+| `server.host` | Minecraft 服务器地址 |
+| `server.port` | 服务器端口 |
+| `server.version` | 游戏版本 |
+| `bot.username` | Bot 用户名 |
+| `bot.password` | 登录密码（离线模式留空） |
+| `command_prefix` | 游戏内指令前缀，可改为 `!`、`/` 等 |
+| `midi_dir` | MIDI 文件存放目录 |
 
 ### 运行
 
@@ -105,11 +129,18 @@ python ping_server.py
 | `??help` | 列出所有可用命令 |
 | `??send <消息>` | 让 Bot 发送一条聊天消息 |
 | `??cmd <指令>` | 让 Bot 执行 Minecraft 命令 |
+| `??move <方向> [毫秒]` | 让 Bot 移动：forward/back/left/right |
+| `??jump` | 让 Bot 跳跃 |
+| `??stop` | 停止所有移动 |
+| `??goto <x> <y> <z>` | 寻路到目标坐标 |
+| `??follow <玩家> [距离]` | 跟随指定玩家 |
 | `??respawn` | 让 Bot 重生 |
 | `??restart` | 重启 Bot 进程 |
 | `??midi list` | 列出 MIDI 目录下的可用文件 |
 | `??midi play <文件名>` | 播放指定 MIDI 文件 |
 | `??midi stop` | 停止当前播放 |
+
+> 指令前缀可通过 `config.json` 中的 `command_prefix` 修改。支持公聊和私聊两种触发方式。
 
 ## MIDI 播放
 
@@ -128,6 +159,7 @@ python ping_server.py
 
 ### Node.js
 - [mineflayer](https://github.com/PrismarineJS/mineflayer) — Minecraft 协议客户端库
+- [mineflayer-pathfinder](https://github.com/PrismarineJS/mineflayer-pathfinder) — 寻路与移动插件
 
 ## License
 

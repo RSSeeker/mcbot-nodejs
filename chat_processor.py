@@ -7,7 +7,7 @@ import json
 import logging
 
 from command_manager import CommandManager
-from utils import get_username
+from utils import get_username, get_command_prefix
 
 logger = logging.getLogger("bot")
 
@@ -166,29 +166,41 @@ def process_chat(raw_content):
         logger.info(f"[纯文本] {plain[:300]}")
 
     # 尝试从 plain 文本中提取发送者和消息
-    # 格式: [频道]发送者 >> 消息内容
     import re
     bot_name = get_username()
     player_name = ""
     chat_msg = ""
 
-    m = re.match(r'(?:\[.*?\]\s*)?(\w+)\s*>>\s*(.*)', plain)
-    if m:
-        player_name = m.group(1)
-        chat_msg = m.group(2).strip()
+    # 格式1: 私聊 [发送者 -> me] 消息
+    pm = re.match(r'\[(\w+)\s*->\s*me\]\s*(.*)', plain)
+    if pm:
+        player_name = pm.group(1)
+        chat_msg = pm.group(2).strip()
         # 跳过 Bot 自己的消息
         if bot_name and player_name == bot_name:
             return
-    else:
+
+    # 格式2: 公聊 [频道]发送者 >> 消息
+    if not chat_msg:
+        m = re.match(r'(?:\[.*?\]\s*)?(\w+)\s*>>\s*(.*)', plain)
+        if m:
+            player_name = m.group(1)
+            chat_msg = m.group(2).strip()
+            # 跳过 Bot 自己的消息
+            if bot_name and player_name == bot_name:
+                return
+
+    if not chat_msg:
         # 尝试结构化提取 [玩家] / [地皮] 格式
         if plain.startswith("[玩家]") or plain.startswith("[地皮]"):
             player_name, chat_msg = _extract_player_and_msg(content)
         if not chat_msg:
             chat_msg = plain
 
-    # 只响应以 ?? 开头的消息
-    if chat_msg and chat_msg.startswith("??"):
-        command_line = chat_msg[2:].strip()
+    # 只响应以配置的前缀开头的消息
+    prefix = get_command_prefix()
+    if chat_msg and prefix and chat_msg.startswith(prefix):
+        command_line = chat_msg[len(prefix):].strip()
         if command_line:
             logger.info(f"[命令] {player_name}: {command_line}")
             CommandManager.process_command(command_line, player_name)

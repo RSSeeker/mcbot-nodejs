@@ -1,0 +1,13 @@
+{
+    "server": {
+        "host": "服务器地址",
+        "port": 25565,
+        "version": "1.21.4"
+    },
+    "bot": {
+        "username": "Bot名称",
+        "password": "登录密码（无密码留空）"
+    },
+    "command_prefix": "??",
+    "midi_dir": "midi"
+}

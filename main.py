@@ -6,10 +6,8 @@ main.py — mcbot Python 入口
 用法:
     python main.py
 
-配置项（直接在下方修改）:
-    SERVER_HOST     服务器地址
-    USERNAME        Bot 用户名（离线模式）
-    MIDI_DIR        MIDI 文件存放目录
+配置文件:
+    config.json — 服务器地址、Bot 用户名、登录密码等
 """
 
 import json
@@ -22,13 +20,20 @@ import threading
 from chat_processor import process_chat
 from command_manager import CommandManager
 from commands import register_all
-from utils import set_stdin, set_username, send_chat, send_command
+from utils import set_stdin, set_username, set_command_prefix, send_chat, send_command
 
-# ── 配置 ──
-SERVER_HOST = "mc.weeaxe.cn"
-SERVER_PORT = 25565
-USERNAME = "RS_Bot"
-MIDI_DIR = "midi"
+# ── 加载配置 ──
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    _cfg = json.load(f)
+
+SERVER_HOST = _cfg["server"]["host"]
+SERVER_PORT = _cfg["server"]["port"]
+SERVER_VERSION = _cfg["server"].get("version", "1.21.4")
+USERNAME = _cfg["bot"]["username"]
+PASSWORD = _cfg["bot"].get("password", "")
+MIDI_DIR = _cfg.get("midi_dir", "midi")
+COMMAND_PREFIX = _cfg.get("command_prefix", "??")
 
 # ── 日志 ──
 logging.basicConfig(
@@ -42,13 +47,14 @@ def main():
     os.makedirs(MIDI_DIR, exist_ok=True)
 
     set_username(USERNAME)
+    set_command_prefix(COMMAND_PREFIX)
 
     # ── 启动 Node.js Mineflayer 代理 ──
     node_script = os.path.join(os.path.dirname(__file__), "mineflayer_bot.js")
     logger.info(f"启动 Mineflayer 代理: {node_script}")
 
     bot_proc = subprocess.Popen(
-        ["node", node_script, SERVER_HOST, str(SERVER_PORT), USERNAME],
+        ["node", node_script],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -69,10 +75,10 @@ def main():
 
     print("=" * 50)
     print("  mcbot-python 已启动 (Mineflayer 代理)")
-    print(f"  服务器: {SERVER_HOST}:{SERVER_PORT}")
+    print(f"  服务器: {SERVER_HOST}:{SERVER_PORT} (MC {SERVER_VERSION})")
     print(f"  用户名: {USERNAME}")
     print(f"  MIDI 目录: {MIDI_DIR}")
-    print("  在游戏内发送 ??help 查看命令")
+    print(f"  在游戏内发送 {COMMAND_PREFIX}help 查看命令")
     print("=" * 50)
     print("  输入消息按 Enter 发送 (以 / 开头执行命令，输入 quit 退出)")
 

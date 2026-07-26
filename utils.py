@@ -11,6 +11,7 @@ logger = logging.getLogger("bot")
 # 全局状态
 _bot_stdin = sys.stdin  # Node 子进程的 stdin（实际写入用）
 _bot_username = ""
+_command_prefix = "??"
 
 
 def set_stdin(fd):
@@ -28,6 +29,17 @@ def set_username(name: str):
 def get_username() -> str:
     """获取 Bot 用户名"""
     return _bot_username
+
+
+def set_command_prefix(prefix: str):
+    """设置指令前缀（如 ??、!、/ 等）"""
+    global _command_prefix
+    _command_prefix = prefix
+
+
+def get_command_prefix() -> str:
+    """获取当前指令前缀"""
+    return _command_prefix
 
 
 def _send_json(obj: dict):
@@ -68,3 +80,31 @@ def send_respawn():
 def send_quit():
     """发送退出指令"""
     _send_json({"type": "quit"})
+
+
+def send_move(direction: str, duration: int = 1000):
+    """基本 WASD 移动: forward/back/left/right"""
+    _send_json({"type": "move", "dir": direction, "duration": duration})
+    logger.info(f"[Bot → Move] {direction} {duration}ms")
+
+
+def send_jump():
+    """跳跃"""
+    _send_json({"type": "jump"})
+
+
+def send_stop():
+    """停止所有移动"""
+    _send_json({"type": "stop"})
+
+
+def send_goto(x: int, y: int, z: int):
+    """寻路到目标坐标"""
+    _send_json({"type": "goto", "x": x, "y": y, "z": z})
+    logger.info(f"[Bot → Goto] {x} {y} {z}")
+
+
+def send_follow(player: str, distance: float = 2.0):
+    """跟随指定玩家"""
+    _send_json({"type": "follow", "player": player, "distance": distance})
+    logger.info(f"[Bot → Follow] {player}")
