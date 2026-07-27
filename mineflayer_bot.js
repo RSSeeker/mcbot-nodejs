@@ -249,7 +249,12 @@ function stopMove() {
         moveTimer = null;
     }
     if (activeMoveDir) {
-        bot.setControlState(activeMoveDir, false);
+        // 如果正在骑乘，发送零值移动指令停止载具
+        if (bot.vehicle) {
+            bot.moveVehicle(0, 0);
+        } else {
+            bot.setControlState(activeMoveDir, false);
+        }
         activeMoveDir = null;
     }
     // 停止 pathfinder 寻路
@@ -258,12 +263,30 @@ function stopMove() {
 
 function startMove(dir, duration) {
     stopMove();
-    bot.setControlState(dir, true);
-    activeMoveDir = dir;
-    if (duration > 0) {
-        moveTimer = setTimeout(() => {
-            stopMove();
-        }, duration);
+    if (bot.vehicle) {
+        // 骑乘时使用 moveVehicle 控制载具
+        const moveMap = {
+            forward:  [0, 1.0],
+            back:     [0, -1.0],
+            left:     [-1.0, 0],
+            right:    [1.0, 0],
+        };
+        const [left, forward] = moveMap[dir] || [0, 0];
+        bot.moveVehicle(left, forward);
+        activeMoveDir = dir;
+        if (duration > 0) {
+            moveTimer = setTimeout(() => {
+                stopMove();
+            }, duration);
+        }
+    } else {
+        bot.setControlState(dir, true);
+        activeMoveDir = dir;
+        if (duration > 0) {
+            moveTimer = setTimeout(() => {
+                stopMove();
+            }, duration);
+        }
     }
 }
 
@@ -372,9 +395,15 @@ rl.on('line', (line) => {
                 break;
 
             case 'jump':
-                bot.setControlState('jump', true);
-                setTimeout(() => bot.setControlState('jump', false), 200);
-                logInfo('[Jump]');
+                if (bot.vehicle) {
+                    // 骑乘时跳跃（马）
+                    bot.jump();
+                    logInfo('[Jump] 载具跳跃');
+                } else {
+                    bot.setControlState('jump', true);
+                    setTimeout(() => bot.setControlState('jump', false), 200);
+                    logInfo('[Jump]');
+                }
                 break;
 
             case 'stop':
@@ -436,7 +465,6 @@ rl.on('line', (line) => {
                 // 转动视角: {type:"look", yaw:180, pitch:0}
                 // 看向玩家: {type:"look", player:"xxx"}
                 // 看向坐标: {type:"look", x:100, y:64, z:200}
-                // 使用全局 LOOK_ROTATION_DELAY_MS 等待（不再接受每次调用的 speed 参数）
                 const waitMsForLook = LOOK_ROTATION_DELAY_MS;
                 if (data.player) {
                     const lookTarget = bot.players[data.player];
@@ -445,13 +473,13 @@ rl.on('line', (line) => {
                         break;
                     }
                     (async () => {
-                        bot.lookAt(lookTarget.entity.position.offset(0, 1.6, 0));
+                        await bot.lookAt(lookTarget.entity.position.offset(0, 1.6, 0));
                         await new Promise(resolve => setTimeout(resolve, waitMsForLook));
                         logInfo(`[Look] 看向玩家 ${data.player}`);
                     })();
                 } else if (data.x !== undefined) {
                     (async () => {
-                        bot.lookAt(new Vec3(data.x, data.y + 0.5 || 0.5, data.z));
+                        await bot.lookAt(new Vec3(data.x, data.y + 0.5 || 0.5, data.z));
                         await new Promise(resolve => setTimeout(resolve, waitMsForLook));
                         logInfo(`[Look] 看向坐标 ${data.x} ${data.y} ${data.z}`);
                     })();
@@ -459,7 +487,7 @@ rl.on('line', (line) => {
                     const yaw = data.yaw != null ? data.yaw : 0;
                     const pitch = data.pitch != null ? data.pitch : 0;
                     (async () => {
-                        bot.look(yaw, pitch);
+                        await bot.look(yaw, pitch);
                         await new Promise(resolve => setTimeout(resolve, waitMsForLook));
                         logInfo(`[Look] yaw=${yaw.toFixed(1)} pitch=${pitch.toFixed(1)}`);
                     })();
@@ -569,7 +597,7 @@ rl.on('line', (line) => {
                 break;
 
             case 'interact':
-                // 与方块或实体交互（开门/开箱/拉杆/村民交易/骑马等）
+                // 与方块或实体交互（开门/开箱/拉杆/村民交易等）
                 const interBlock = bot.blockAtCursor();
                 if (interBlock) {
                     bot.activateBlock(interBlock)
@@ -629,7 +657,7 @@ rl.on('line', (line) => {
                 break;
 
             case 'cancel':
-                // 取消所有按住的操作（停止挖掘/使用物品/弓箭/移动）
+                // 取消所有按住的操作（停止挖掘/使用物品/弓箭/移动/关闭容器）
                 // 停止挖掘
                 try { bot.stopDigging(); } catch (e) {}
                 // 停止使用物品（拉弓、吃东西等）
@@ -639,6 +667,11 @@ rl.on('line', (line) => {
                 // 重置长按状态
                 isLeftClickHolding = false;
                 isRightClickHolding = false;
+                // 关闭已打开的容器（箱子/熔炉/工作台等）
+                if (bot.currentWindow) {
+                    try { bot.closeWindow(bot.currentWindow); } catch (e) {}
+                    logInfo('[Cancel] 已关闭容器');
+                }
                 // 停止移动
                 stopMove();
                 // 释放所有方向键

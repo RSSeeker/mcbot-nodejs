@@ -27,7 +27,7 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 - **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
 - **交互式控制台**：终端可直接发送聊天/Bot 命令/MC 指令
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
-- **动作交互**：左键攻击/挖掘、右键使用/放置、潜行、疾跑、丢物品、切格子、使用物品
+- **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/骑乘等）、使用物品（自动处理弩/弓时序）、潜行、疾跑、丢物品、切格子
 - **实体交互**：骑乘、下马、装备物品
 - **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品
 - **自动恢复**：死亡自动重生、断连自动重连（指数退避）
@@ -43,7 +43,7 @@ mcbot-python/
 ├── chat_processor.py     # 聊天解析：JSON → 纯文本 + ANSI 输出
 ├── command_manager.py    # 命令注册与分发系统
 ├── utils.py              # IPC 工具函数（自动读取 config.json）
-├── test.py               # 功能测试脚本（18 项测试）
+├── test.py               # 功能测试脚本（19 项测试）
 ├── ping_server.py        # 独立工具：探测服务器版本和在线人数
 ├── commands/
 │   ├── __init__.py         # 命令注册入口
@@ -53,7 +53,7 @@ mcbot-python/
 │   ├── respawn_command.py  # **respawn — 让 Bot 重生
 │   ├── restart_command.py  # **restart — 重启 Bot 进程
 │   ├── move_command.py     # **move/jump/stop/goto/follow — 移动控制
-│   ├── action_command.py   # **leftclick/rightclick/sneak/drop/dropall/slot/look/cancel — 动作交互
+│   ├── action_command.py   # **attack/dig/place/interact/use/sneak/drop/dropall/slot/look/cancel — 动作交互
 │   └── test_command.py     # **test — 自定义测试框架
 ├── config.json             # 配置文件（服务器/用户名/密码/指令前缀）
 ├── config.example.json     # 配置文件模板
@@ -123,7 +123,7 @@ python main.py
 ### 运行测试
 
 ```bash
-python test.py              # 完整测试（18 项）
+python test.py              # 完整测试（19 项）
 python test.py --quick      # 快速测试（基础功能）
 python test.py --interactive # 交互模式
 ```
@@ -150,8 +150,14 @@ python ping_server.py
 | `**follow <玩家>` | 跟随指定玩家 |
 | `**look <偏航> [俯仰]` | 设置视角角度 |
 | `**look at <玩家>` | 看向指定玩家 |
-| `**leftclick [时间]` | 左键（攻击实体 / 挖掘方块），时间参数指定长按毫秒数 |
-| `**rightclick [时间]` | 右键（使用物品 / 放置方块 / 交互），时间参数指定长按毫秒数 |
+| `**attack [时间]` | 攻击视线中的实体，时间参数指定长按毫秒数 |
+| `**dig [时间]` | 挖掘视线中的方块，时间参数指定长按毫秒数 |
+| `**place` | 放置方块（对准方块表面） |
+| `**interact` | 与方块/实体交互（开门/开箱/拉杆/村民交易等） |
+| `**mount` | 骑乘视线中的载具或生物（船/矿车/马/猪/炽足兽等） |
+| `**dismount` | 离开当前载具 |
+| `**use` | 使用手持物品（吃东西/射箭/投掷/放水桶等，自动处理弩/弓时序） |
+| `**usehold [时间]` | 长按使用手持物品（如吃东西/拉弓），默认2000ms |
 | `**sneak` | 切换潜行状态（蹲下/起身） |
 | `**sprint` | 切换疾跑状态 |
 | `**drop` | 丢出手持物品 |
@@ -193,8 +199,13 @@ bot.whisper("玩家名", "你好")      # 私聊
 bot.move_forward(3000)            # 前进 3 秒
 bot.jump()                        # 跳跃
 bot.look(90, 0)                   # 设置视角
-bot.left_click()                  # 攻击
-bot.right_click()                 # 交互
+bot.attack()                     # 攻击实体
+bot.dig()                        # 挖掘方块
+bot.place()                      # 放置方块
+bot.interact()                   # 交互（开门/开箱等）
+bot.mount()                      # 骑乘载具或生物
+bot.dismount()                   # 离开载具
+bot.use_item()                   # 使用手持物品（自动处理弩/弓）
 bot.sneak(True)                   # 蹲下
 bot.sprint(True)                   # 开始疾跑
 bot.switch_slot(1)                # 切第 1 格
