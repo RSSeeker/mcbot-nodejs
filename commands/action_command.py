@@ -2,8 +2,10 @@
 动作命令:
   **look <偏航> [俯仰] — 设置视角角度（如 **look 180 0）
   **look at <玩家>     — 看向指定玩家
-  **leftclick          — 左键（攻击视线中的实体 / 挖掘方块）
-  **rightclick         — 右键（放置方块 / 激活方块 / 实体交互 / 使用物品）
+  **leftclick [时间]    — 左键点击（攻击视线中的实体 / 挖掘方块）
+                         时间参数: 指定长按毫秒数，如 **leftclick 2000（长按2秒）
+  **rightclick [时间]   — 右键点击（放置方块 / 激活方块 / 实体交互 / 使用物品）
+                         时间参数: 指定长按毫秒数，如 **rightclick 3000（长按3秒）
   **cancel             — 取消所有操作（停止挖掘/使用物品/弓箭/移动）
   **sneak              — 切换潜行（蹲下/起身）
   **drop               — 丢出手持物品
@@ -12,17 +14,63 @@
 """
 
 from command_manager import Command
-from utils import send_whisper, send_leftclick, send_rightclick, send_cancel, send_look, send_sneak, send_drop, send_switch_slot
+from utils import send_whisper, send_leftclick, send_leftclick_hold, send_rightclick, send_rightclick_hold, send_cancel, send_look, send_sneak, send_drop, send_switch_slot
+import threading
+import time
 
 
 def _leftclick_execute(conn, args: list[str], player: str):
-    send_leftclick()
-    send_whisper(player, "已执行左键点击")
+    """左键点击/长按"""
+    duration = None
+    if args:
+        try:
+            duration = int(args[0])
+            if duration <= 0:
+                duration = None
+        except ValueError:
+            pass
+    
+    if duration:
+        # 长按模式：开始长按，然后定时取消
+        send_leftclick_hold()
+        send_whisper(player, f"左键长按开始，持续 {duration}ms")
+        
+        def release():
+            send_cancel()
+            send_whisper(player, "左键长按结束")
+        
+        threading.Thread(target=lambda: (time.sleep(duration/1000), release()), daemon=True).start()
+    else:
+        # 普通点击（与真实玩家行为一致）
+        send_leftclick()
+        send_whisper(player, "已执行左键点击")
 
 
 def _rightclick_execute(conn, args: list[str], player: str):
-    send_rightclick()
-    send_whisper(player, "已执行右键点击")
+    """右键点击/长按（与真实玩家行为一致）"""
+    duration = None
+    if args:
+        try:
+            duration = int(args[0])
+            if duration <= 0:
+                duration = None
+        except ValueError:
+            pass
+    
+    if duration:
+        # 长按模式：开始长按，然后定时取消
+        send_rightclick_hold()
+        send_whisper(player, f"右键长按开始，持续 {duration}ms")
+        
+        def release():
+            send_cancel()
+            send_whisper(player, "右键长按结束")
+        
+        threading.Thread(target=lambda: (time.sleep(duration/1000), release()), daemon=True).start()
+    else:
+        # 普通点击（与真实玩家行为一致）
+        send_rightclick()
+        send_whisper(player, "已执行右键点击")
 
 
 def _sneak_execute(conn, args: list[str], player: str):

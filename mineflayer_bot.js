@@ -429,6 +429,25 @@ rl.on('line', (line) => {
                 }
                 break;
 
+            case 'leftclick_hold':
+                // 左键长按（持续按住）
+                bot.swingArm('left');
+                const holdLEntity = bot.entityAtCursor();
+                if (holdLEntity) {
+                    bot.attack(holdLEntity).catch(err => logInfo(`[LeftClickHold] 攻击失败: ${err.message}`));
+                    logInfo(`[LeftClickHold] 攻击实体 ${holdLEntity.name || holdLEntity.username || '?'}`);
+                } else {
+                    const holdLBlock = bot.blockAtCursor();
+                    if (holdLBlock) {
+                        const isCreative = bot.game && bot.game.gameMode === 'creative';
+                        if (isCreative || bot.canDigBlock(holdLBlock)) {
+                            bot.dig(holdLBlock, true).catch(err => logInfo(`[LeftClickHold] 挖掘失败: ${err.message}`));
+                            logInfo(`[LeftClickHold] 开始挖掘 ${holdLBlock.name}`);
+                        }
+                    }
+                }
+                break;
+
             case 'rightclick':
                 // 右键（放置方块→激活方块→激活实体→骑乘→使用物品）
                 const rBlock = bot.blockAtCursor();
@@ -486,6 +505,12 @@ rl.on('line', (line) => {
                         logInfo('[RightClick]');
                     }
                 }
+                break;
+
+            case 'rightclick_hold':
+                // 右键长按（持续按住使用物品）
+                bot.activateItem();
+                logInfo('[RightClickHold] 开始长按');
                 break;
 
             case 'cancel':

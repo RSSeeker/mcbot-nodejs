@@ -126,9 +126,21 @@ def send_leftclick():
     _send_json({"type": "leftclick"})
 
 
+def send_leftclick_hold():
+    """左键长按（持续按住）"""
+    _send_json({"type": "leftclick_hold"})
+    logger.info("[Bot → LeftClickHold]")
+
+
 def send_rightclick():
     """右键点击（使用物品/放置方块/交互）"""
     _send_json({"type": "rightclick"})
+
+
+def send_rightclick_hold():
+    """右键长按（持续按住使用物品）"""
+    _send_json({"type": "rightclick_hold"})
+    logger.info("[Bot → RightClickHold]")
 
 
 def send_sneak(state: bool | None = None):
