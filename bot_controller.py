@@ -30,7 +30,7 @@ from utils import (
     send_place, send_interact, send_use_item, send_use_item_hold,
     send_cancel, send_sneak, send_drop, send_switch_slot,
     send_look,
-    send_activate_item, send_deactivate_item, send_equip, send_mount, send_dismount,
+    send_activate_item, send_deactivate_item, send_equip, send_dismount,
     send_set_control_state, send_status_request,
 )
 
@@ -426,10 +426,6 @@ class BotController:
     # ═══════════════════════════════════
     #  实体交互
     # ═══════════════════════════════════
-
-    def mount(self):
-        """骑乘视线中的实体或最近的坐骑"""
-        send_mount()
 
     def dismount(self):
         """从坐骑上下来"""

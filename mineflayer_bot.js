@@ -574,18 +574,36 @@ rl.on('line', (line) => {
                 break;
 
             case 'interact':
-                // 与方块或实体交互（开门/开箱/拉杆/村民交易等）
-                const interBlock = bot.blockAtCursor();
-                if (interBlock) {
-                    bot.activateBlock(interBlock)
-                        .then(() => logInfo(`[Interact] 激活方块 ${interBlock.name}`))
-                        .catch(err => logInfo(`[Interact] 激活方块失败: ${err.message}`));
-                } else {
-                    const interEntity = bot.entityAtCursor();
-                    if (interEntity) {
+                // 与实体或方块交互（优先实体：骑乘/交互；其次方块：开门/开箱等）
+                const interEntity = bot.entityAtCursor();
+                if (interEntity) {
+                    const mountableNames = ['boat', 'chest_boat', 'minecart', 'horse', 'donkey', 'mule', 'pig', 'strider', 'llama', 'camel', 'skeleton_horse', 'zombie_horse', 'raft', 'bamboo_raft', 'player'];
+                    if (mountableNames.includes(interEntity.name)) {
+                        (async () => {
+                            logInfo(`[Interact] 尝试骑乘: ${interEntity.name} (id=${interEntity.id})`);
+                            bot.mount(interEntity);
+                            await new Promise((resolve) => {
+                                const timeout = setTimeout(() => resolve(), 2000);
+                                bot.once('mount', () => { clearTimeout(timeout); resolve(); });
+                            });
+                            if (bot.vehicle) {
+                                logInfo(`[Interact] ✓ 骑乘成功: ${bot.vehicle.name || '?'}`);
+                            } else {
+                                bot.vehicle = interEntity;
+                                logInfo(`[Interact] ✓ 骑乘成功 (手动): ${interEntity.name}`);
+                            }
+                        })();
+                    } else {
                         bot.activateEntity(interEntity)
                             .then(() => logInfo(`[Interact] 与实体交互: ${interEntity.name || interEntity.username || '?'}`))
                             .catch(err => logInfo(`[Interact] 实体交互失败: ${err.message}`));
+                    }
+                } else {
+                    const interBlock = bot.blockAtCursor();
+                    if (interBlock) {
+                        bot.activateBlock(interBlock)
+                            .then(() => logInfo(`[Interact] 激活方块 ${interBlock.name}`))
+                            .catch(err => logInfo(`[Interact] 激活方块失败: ${err.message}`));
                     } else {
                         logInfo('[Interact] 无交互目标');
                     }
@@ -778,25 +796,7 @@ rl.on('line', (line) => {
                 })();
                 break;
 
-            // ── 骑乘 / 下马 ──
-            case 'mount':
-                (async () => {
-                    const mountableNames = ['boat', 'chest_boat', 'minecart', 'horse', 'donkey', 'mule', 'pig', 'strider', 'llama', 'camel', 'skeleton_horse', 'zombie_horse', 'raft', 'bamboo_raft'];
-                    const mountEntity = bot.entityAtCursor()
-                        || bot.nearestEntity(e => mountableNames.includes(e.name));
-                    if (mountEntity) {
-                        try {
-                            await bot.mount(mountEntity);
-                            logInfo(`[Mount] 已骑乘 ${mountEntity.name || '?'}`);
-                        } catch (err) {
-                            logInfo(`[Mount] 失败: ${err.message}`);
-                        }
-                    } else {
-                        logInfo('[Mount] 无目标');
-                    }
-                })();
-                break;
-
+            // ── 下马 ──
             case 'dismount':
                 // 离开载具（通过发送潜行键模拟，Minecraft 原版下马方式）
                 if (!bot.vehicle) {

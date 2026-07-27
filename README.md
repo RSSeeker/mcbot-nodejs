@@ -27,7 +27,7 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 - **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
 - **交互式控制台**：终端可直接发送聊天/Bot 命令/MC 指令
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
-- **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/骑乘等）、使用物品（自动处理弩/弓时序）、潜行、疾跑、丢物品、切格子
+- **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/开箱/骑乘等）、使用物品（自动处理弩/弓时序）、潜行、疾跑、丢物品、切格子
 - **实体交互**：骑乘、下马、装备物品
 - **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品
 - **自动恢复**：死亡自动重生、断连自动重连（指数退避）
@@ -53,7 +53,7 @@ mcbot-python/
 │   ├── respawn_command.py  # **respawn — 让 Bot 重生
 │   ├── restart_command.py  # **restart — 重启 Bot 进程
 │   ├── move_command.py     # **move/jump/stop/goto/follow — 移动控制
-│   ├── action_command.py   # **attack/dig/place/interact/use/sneak/drop/dropall/slot/look/cancel — 动作交互
+│   ├── action_command.py   # **attack/dig/place/interact/use/sneak/drop/dropall/slot/look/cancel/dismount — 动作交互
 │   └── test_command.py     # **test — 自定义测试框架
 ├── config.json             # 配置文件（服务器/用户名/密码/指令前缀）
 ├── config.example.json     # 配置文件模板
@@ -153,8 +153,7 @@ python ping_server.py
 | `**attack [时间]` | 攻击视线中的实体，时间参数指定长按毫秒数 |
 | `**dig [时间]` | 挖掘视线中的方块，时间参数指定长按毫秒数 |
 | `**place` | 放置方块（对准方块表面） |
-| `**interact` | 与方块/实体交互（开门/开箱/拉杆/村民交易等） |
-| `**mount` | 骑乘视线中的载具或生物（船/矿车/马/猪/炽足兽等） |
+| `**interact` | 与方块/实体交互（开门/开箱/拉杆/村民交易/骑乘载具等） |
 | `**dismount` | 离开当前载具 |
 | `**use` | 使用手持物品（吃东西/射箭/投掷/放水桶等，自动处理弩/弓时序） |
 | `**usehold [时间]` | 长按使用手持物品（如吃东西/拉弓），默认2000ms |
@@ -202,8 +201,7 @@ bot.look(90, 0)                   # 设置视角
 bot.attack()                     # 攻击实体
 bot.dig()                        # 挖掘方块
 bot.place()                      # 放置方块
-bot.interact()                   # 交互（开门/开箱等）
-bot.mount()                      # 骑乘载具或生物
+bot.interact()                   # 交互（开门/开箱/骑乘等）
 bot.dismount()                   # 离开载具
 bot.use_item()                   # 使用手持物品（自动处理弩/弓）
 bot.sneak(True)                   # 蹲下
@@ -211,8 +209,6 @@ bot.sprint(True)                   # 开始疾跑
 bot.switch_slot(1)                # 切第 1 格
 bot.drop()                        # 丢物品
 bot.equip("diamond_sword")        # 装备物品
-bot.mount()                       # 骑乘
-bot.dismount()                    # 下马
 status = bot.get_status()         # 查询状态
 
 bot.disconnect()

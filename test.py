@@ -320,7 +320,6 @@ def run_interactive(bot: BotController):
     print("    bot.cancel()         — 取消操作")
     print("    bot.get_status()     — 查询状态")
     print("    bot.equip(name)      — 装备物品")
-    print("    bot.mount()          — 骑乘")
     print("    bot.dismount()       — 下马")
     print("    bot.respawn()        — 重生")
     print("    quit                 — 退出")

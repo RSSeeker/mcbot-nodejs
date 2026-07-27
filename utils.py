@@ -222,12 +222,6 @@ def send_equip(item_name: str, destination: str = "hand"):
     logger.info(f"[Bot → Equip] {item_name} → {destination}")
 
 
-def send_mount():
-    """骑乘视线中的实体或最近的坐骑"""
-    _send_json({"type": "mount"})
-    logger.info("[Bot → Mount]")
-
-
 def send_dismount():
     """从坐骑上下来"""
     _send_json({"type": "dismount"})

@@ -7,8 +7,7 @@
   **dig [时间]           — 挖掘视线中的方块
                            时间参数: 指定长按毫秒数，如 **dig 2000（长按2秒）
   **place               — 放置方块（对准方块表面）
-  **interact            — 与方块或实体交互（开门/开箱/村民交易等）
-  **mount               — 骑乘视线中的载具或生物（船/矿车/马/猪/炽足兽等）
+  **interact            — 与方块或实体交互（开门/开箱/村民交易/骑乘载具等）
   **dismount            — 离开当前载具
   **use                 — 使用手持物品（吃东西/射箭/投掷/放水桶等）
   **usehold [时间]       — 长按使用手持物品（如 **usehold 2000）
@@ -22,7 +21,7 @@
 """
 
 from command_manager import Command
-from utils import send_whisper, send_attack, send_attack_hold, send_dig, send_dig_hold, send_place, send_interact, send_mount, send_dismount, send_use_item, send_use_item_hold, send_cancel, send_look, send_sneak, send_sprint, send_drop, send_clear_inventory, send_switch_slot
+from utils import send_whisper, send_attack, send_attack_hold, send_dig, send_dig_hold, send_place, send_interact, send_dismount, send_use_item, send_use_item_hold, send_cancel, send_look, send_sneak, send_sprint, send_drop, send_clear_inventory, send_switch_slot
 import threading
 import time
 
@@ -82,11 +81,6 @@ def _place_execute(conn, args: list[str], player: str):
     send_place()
     send_whisper(player, "已执行放置方块")
 
-
-def _mount_execute(conn, args: list[str], player: str):
-    """骑乘载具或生物"""
-    send_mount()
-    send_whisper(player, "正在尝试骑乘...")
 
 def _dismount_execute(conn, args: list[str], player: str):
     """离开载具"""
@@ -199,7 +193,6 @@ attack_command = Command.literal("attack").executes(_attack_execute)
 dig_command = Command.literal("dig").executes(_dig_execute)
 place_command = Command.literal("place").executes(_place_execute)
 interact_command = Command.literal("interact").executes(_interact_execute)
-mount_command = Command.literal("mount").executes(_mount_execute)
 dismount_command = Command.literal("dismount").executes(_dismount_execute)
 use_command = Command.literal("use").executes(_use_execute)
 usehold_command = Command.literal("usehold").executes(_usehold_execute)
