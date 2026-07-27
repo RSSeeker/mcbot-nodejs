@@ -554,13 +554,29 @@ rl.on('line', (line) => {
                 break;
 
             case 'slot':
-                // 切换物品栏: {type:"slot", slot:1-9}
-                const slotIdx = (data.slot || 1) - 1;  // 用户输入1-9 → 内部0-8
-                if (slotIdx >= 0 && slotIdx <= 8) {
-                    bot.setQuickBarSlot(slotIdx);
-                    const item = bot.inventory.slots[36 + slotIdx];
-                    const itemName = item ? `${item.name} x${item.count}` : '空';
-                    logInfo(`[Slot] 切换到格子${slotIdx + 1}: ${itemName}`);
+                // 切换物品栏: {type:"slot", slot:1-44}
+                // 1-9=快捷栏, 10-44=背包
+                const slotIdx = (data.slot || 1) - 1;
+                if (slotIdx >= 0 && slotIdx <= 43) {
+                    if (slotIdx <= 8) {
+                        bot.setQuickBarSlot(slotIdx);
+                        const item = bot.inventory.slots[36 + slotIdx];
+                        const itemName = item ? `${item.name} x${item.count}` : '空';
+                        logInfo(`[Slot] 切换到快捷栏${slotIdx + 1}: ${itemName}`);
+                    } else {
+                        (async () => {
+                            try {
+                                const sourceSlot = slotIdx;
+                                const targetSlot = bot.quickBarSlot;
+                                await bot.moveSlot(sourceSlot, targetSlot);
+                                const item = bot.inventory.slots[36 + targetSlot];
+                                const itemName = item ? `${item.name} x${item.count}` : '空';
+                                logInfo(`[Slot] 移动背包${slotIdx + 1}到快捷栏${targetSlot + 1}: ${itemName}`);
+                            } catch (err) {
+                                logInfo(`[Slot] 移动失败: ${err.message}`);
+                            }
+                        })();
+                    }
                 }
                 break;
 

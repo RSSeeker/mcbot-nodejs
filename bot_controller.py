@@ -381,7 +381,7 @@ class BotController:
         send_drop(drop_all=True)
 
     def switch_slot(self, slot: int):
-        """切换到物品栏指定格 (1-9)"""
+        """切换到物品栏指定格 (1-44)"""
         send_switch_slot(slot)
 
     def equip(self, item_name: str, destination: str = "hand"):
