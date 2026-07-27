@@ -57,6 +57,8 @@ let isLeftClickHolding = false;     // 左键长按状态
 let isRightClickHolding = false;    // 右键长按状态
 const MAX_RECONNECT_DELAY = 60000;   // 最长重连间隔 60 秒
 const BASE_RECONNECT_DELAY = 3000;   // 基础重连间隔 3 秒
+// 视角转动后等待时间（ms），用于确保服务器收到正确的瞄准位置再执行放置/交互
+let LOOK_ROTATION_DELAY_MS = 120;
 
 // ── 创建 Bot ──
 function createBot() {
@@ -267,19 +269,41 @@ function startMove(dir, duration) {
 
 // 计算 bot 当前看向方块的哪个面（用于 placeBlock）
 function getTargetFace(block) {
+    // 使用视线射线（由视角 yaw/pitch 计算）在一个合理的射程内估算命中点，
+    // 然后根据命中点相对于方块中心的偏移决定放置的面。
     const eyePos = bot.entity.position.offset(0, bot.entity.height, 0);
     const bx = block.position.x + 0.5;
     const by = block.position.y + 0.5;
     const bz = block.position.z + 0.5;
-    const dx = eyePos.x - bx;
-    const dy = eyePos.y - by;
-    const dz = eyePos.z - bz;
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
-    const absDz = Math.abs(dz);
-    if (absDx >= absDy && absDx >= absDz) return new Vec3(Math.sign(dx), 0, 0);
-    if (absDy >= absDx && absDy >= absDz) return new Vec3(0, Math.sign(dy), 0);
-    return new Vec3(0, 0, Math.sign(dz));
+
+    // 计算视线方向（mineflayer 中 yaw/pitch 以弧度表示）
+    let dir;
+    if (typeof bot.entity.yaw === 'number' && typeof bot.entity.pitch === 'number') {
+        const yaw = bot.entity.yaw;
+        const pitch = bot.entity.pitch;
+        const dx = -Math.sin(yaw) * Math.cos(pitch);
+        const dy = -Math.sin(pitch);
+        const dz = Math.cos(yaw) * Math.cos(pitch);
+        dir = new Vec3(dx, dy, dz);
+    } else {
+        // 回退到眼位向方块中心的向量
+        dir = new Vec3(bx - eyePos.x, by - eyePos.y, bz - eyePos.z).normalize();
+    }
+
+    // 射线长度用一个合理的交互距离（例如 6）来近似客户端视距内的交互点
+    const reach = 6;
+    const hit = eyePos.plus(dir.scale(reach));
+
+    const offX = hit.x - bx;
+    const offY = hit.y - by;
+    const offZ = hit.z - bz;
+    const absX = Math.abs(offX);
+    const absY = Math.abs(offY);
+    const absZ = Math.abs(offZ);
+
+    if (absX >= absY && absX >= absZ) return new Vec3(Math.sign(offX), 0, 0);
+    if (absY >= absX && absY >= absZ) return new Vec3(0, Math.sign(offY), 0);
+    return new Vec3(0, 0, Math.sign(offZ));
 }
 
 // ═══════════════════════════════════
@@ -412,22 +436,33 @@ rl.on('line', (line) => {
                 // 转动视角: {type:"look", yaw:180, pitch:0}
                 // 看向玩家: {type:"look", player:"xxx"}
                 // 看向坐标: {type:"look", x:100, y:64, z:200}
+                // 使用全局 LOOK_ROTATION_DELAY_MS 等待（不再接受每次调用的 speed 参数）
+                const waitMsForLook = LOOK_ROTATION_DELAY_MS;
                 if (data.player) {
                     const lookTarget = bot.players[data.player];
                     if (!lookTarget || !lookTarget.entity) {
                         logInfo(`[Look] 找不到玩家: ${data.player}`);
                         break;
                     }
-                    bot.lookAt(lookTarget.entity.position.offset(0, 1.6, 0));
-                    logInfo(`[Look] 看向玩家 ${data.player}`);
+                    (async () => {
+                        bot.lookAt(lookTarget.entity.position.offset(0, 1.6, 0));
+                        await new Promise(resolve => setTimeout(resolve, waitMsForLook));
+                        logInfo(`[Look] 看向玩家 ${data.player}`);
+                    })();
                 } else if (data.x !== undefined) {
-                    bot.lookAt(new Vec3(data.x, data.y + 0.5 || 0.5, data.z));
-                    logInfo(`[Look] 看向坐标 ${data.x} ${data.y} ${data.z}`);
+                    (async () => {
+                        bot.lookAt(new Vec3(data.x, data.y + 0.5 || 0.5, data.z));
+                        await new Promise(resolve => setTimeout(resolve, waitMsForLook));
+                        logInfo(`[Look] 看向坐标 ${data.x} ${data.y} ${data.z}`);
+                    })();
                 } else {
                     const yaw = data.yaw != null ? data.yaw : 0;
                     const pitch = data.pitch != null ? data.pitch : 0;
-                    bot.look(yaw, pitch);
-                    logInfo(`[Look] yaw=${yaw.toFixed(1)} pitch=${pitch.toFixed(1)}`);
+                    (async () => {
+                        bot.look(yaw, pitch);
+                        await new Promise(resolve => setTimeout(resolve, waitMsForLook));
+                        logInfo(`[Look] yaw=${yaw.toFixed(1)} pitch=${pitch.toFixed(1)}`);
+                    })();
                 }
                 break;
 
@@ -483,17 +518,41 @@ rl.on('line', (line) => {
             case 'rightclick':
                 // 右键（放置方块→激活方块→激活实体→骑乘→使用物品）
                 const rBlock = bot.blockAtCursor();
+                // 如果手持的是桶类（放水/放岩浆），优先使用物品激活（与客户端一致）
+                const heldItem = bot.heldItem;
+                if (heldItem && heldItem.name && heldItem.name.includes('bucket')) {
+                    bot.activateItem();
+                    logInfo('[RightClick] 放置流体（容器）');
+                    break;
+                }
+
                 if (rBlock) {
-                    // 优先尝试放置方块（放置在看向的面）
-                    const face = getTargetFace(rBlock);
-                    bot.placeBlock(rBlock, face)
-                        .then(() => logInfo('[RightClick] 方块已放置'))
-                        .catch(() => {
-                            // 放置失败，尝试激活方块（开门/开箱/拉杆等）
-                            bot.activateBlock(rBlock)
-                                .then(() => logInfo(`[RightClick] 激活方块 ${rBlock.name}`))
-                                .catch(() => tryEntityOrUse());
-                        });
+                    // 先让 bot 看向放置点再调用 placeBlock，避免出现“看着方块但服务器未收到瞄准信息”导致延迟
+                    (async () => {
+                        try {
+                            const face = getTargetFace(rBlock);
+                            const placePos = rBlock.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5);
+                            try {
+                                bot.lookAt(placePos);
+                            } catch (e) {
+                                // ignore if lookAt not available as promise
+                            }
+                            // 等待短暂时间以便服务器接收到面向变化
+                            await new Promise(resolve => setTimeout(resolve, LOOK_ROTATION_DELAY_MS));
+
+                            bot.placeBlock(rBlock, face)
+                                .then(() => logInfo('[RightClick] 方块已放置'))
+                                .catch(() => {
+                                    // 放置失败，尝试激活方块（开门/开箱/拉杆等）
+                                    bot.activateBlock(rBlock)
+                                        .then(() => logInfo(`[RightClick] 激活方块 ${rBlock.name}`))
+                                        .catch(() => tryEntityOrUse());
+                                });
+                        } catch (err) {
+                            logInfo(`[RightClick] 放置过程失败: ${err.message}`);
+                            tryEntityOrUse();
+                        }
+                    })();
                 } else {
                     tryEntityOrUse();
                 }
@@ -744,6 +803,8 @@ rl.on('line', (line) => {
                     });
                 })();
                 break;
+
+            
 
             default:
                 logInfo(`未知指令类型: ${data.type}`);
