@@ -469,10 +469,14 @@ rl.on('line', (line) => {
                 function tryEntityOrUse() {
                     const rEntity = bot.entityAtCursor();
                     if (rEntity) {
-                        // 激活实体（村民交易、骑马、上船等）
+                        // 先尝试激活实体（村民交易、骑马、上船等）
                         bot.activateEntity(rEntity)
                             .then(() => logInfo(`[RightClick] 与实体交互: ${rEntity.name || rEntity.username || '?'}`))
-                            .catch(err => logInfo(`[RightClick] 实体交互失败: ${err.message}`));
+                            .catch(err => {
+                                logInfo(`[RightClick] 实体交互失败: ${err.message}`);
+                                // 交互失败后尝试使用物品（投掷雪球等）
+                                useHeldItem();
+                            });
                         return;
                     }
                     useHeldItem();
