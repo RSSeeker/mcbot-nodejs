@@ -53,6 +53,8 @@ let activeMoveDir = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;          // 防重复：同一时刻只允许一个重连定时器存在
 let bowTimer = null;                // 弓拉射定时器
+let isLeftClickHolding = false;     // 左键长按状态
+let isRightClickHolding = false;    // 右键长按状态
 const MAX_RECONNECT_DELAY = 60000;   // 最长重连间隔 60 秒
 const BASE_RECONNECT_DELAY = 3000;   // 基础重连间隔 3 秒
 
@@ -454,6 +456,13 @@ rl.on('line', (line) => {
 
             case 'leftclick_hold':
                 // 左键长按（持续按住）
+                // 如果正在长按，先停止
+                if (isLeftClickHolding) {
+                    try { bot.stopDigging(); } catch (e) {}
+                    isLeftClickHolding = false;
+                    logInfo('[LeftClickHold] 已停止之前的左键长按');
+                }
+                isLeftClickHolding = true;
                 bot.swingArm('left');
                 const holdLEntity = bot.entityAtCursor();
                 if (holdLEntity) {
@@ -536,6 +545,13 @@ rl.on('line', (line) => {
 
             case 'rightclick_hold':
                 // 右键长按（持续按住使用物品）
+                // 如果正在长按，先停止
+                if (isRightClickHolding) {
+                    try { bot.deactivateItem(); } catch (e) {}
+                    isRightClickHolding = false;
+                    logInfo('[RightClickHold] 已停止之前的右键长按');
+                }
+                isRightClickHolding = true;
                 bot.activateItem();
                 logInfo('[RightClickHold] 开始长按');
                 break;
@@ -548,6 +564,9 @@ rl.on('line', (line) => {
                 try { bot.deactivateItem(); } catch (e) {}
                 // 清除弓箭定时器
                 if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
+                // 重置长按状态
+                isLeftClickHolding = false;
+                isRightClickHolding = false;
                 // 停止移动
                 stopMove();
                 // 释放所有方向键
