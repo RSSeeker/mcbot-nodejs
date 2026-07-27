@@ -14,6 +14,7 @@
   **usehold [时间]       — 长按使用手持物品（如 **usehold 2000）
   **cancel              — 取消所有操作（停止挖掘/使用物品/弓箭/移动/关闭容器）
   **sneak               — 切换潜行（蹲下/起身）
+  **sprint              — 切换疾跑（奔跑/走路）
   **drop                — 丢出手持物品
   **dropall             — 丢出背包全部物品
   **clear               — 创造模式清除物品栏
@@ -21,7 +22,7 @@
 """
 
 from command_manager import Command
-from utils import send_whisper, send_attack, send_attack_hold, send_dig, send_dig_hold, send_place, send_interact, send_mount, send_dismount, send_use_item, send_use_item_hold, send_cancel, send_look, send_sneak, send_drop, send_clear_inventory, send_switch_slot
+from utils import send_whisper, send_attack, send_attack_hold, send_dig, send_dig_hold, send_place, send_interact, send_mount, send_dismount, send_use_item, send_use_item_hold, send_cancel, send_look, send_sneak, send_sprint, send_drop, send_clear_inventory, send_switch_slot
 import threading
 import time
 
@@ -130,6 +131,11 @@ def _sneak_execute(conn, args: list[str], player: str):
     send_whisper(player, "已切换潜行状态")
 
 
+def _sprint_execute(conn, args: list[str], player: str):
+    send_sprint()
+    send_whisper(player, "已切换疾跑状态")
+
+
 def _drop_execute(conn, args: list[str], player: str):
     send_drop(drop_all=False)
     send_whisper(player, "已丢出手持物品")
@@ -200,6 +206,7 @@ usehold_command = Command.literal("usehold").executes(_usehold_execute)
 look_command = Command.literal("look").executes(_look_execute)
 cancel_command = Command.literal("cancel").executes(_cancel_execute)
 sneak_command = Command.literal("sneak").executes(_sneak_execute)
+sprint_command = Command.literal("sprint").executes(_sprint_execute)
 drop_command = Command.literal("drop").executes(_drop_execute)
 dropall_command = Command.literal("dropall").executes(_dropall_execute)
 clear_command = Command.literal("clear").executes(_clear_execute)

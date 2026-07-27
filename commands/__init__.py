@@ -4,7 +4,7 @@ from .cmd_command import cmd_command
 from .respawn_command import respawn_command
 from .restart_command import restart_command
 from .move_command import move_command, jump_command, stop_command, goto_command, follow_command
-from .action_command import attack_command, dig_command, place_command, interact_command, mount_command, dismount_command, use_command, usehold_command, look_command, cancel_command, sneak_command, drop_command, dropall_command, clear_command, slot_command
+from .action_command import attack_command, dig_command, place_command, interact_command, mount_command, dismount_command, use_command, usehold_command, look_command, cancel_command, sneak_command, sprint_command, drop_command, dropall_command, clear_command, slot_command
 from .test_command import test_command
 from .ping_command import ping_command
 
@@ -33,6 +33,7 @@ def register_all():
     CommandManager.register(look_command)
     CommandManager.register(cancel_command)
     CommandManager.register(sneak_command)
+    CommandManager.register(sprint_command)
     CommandManager.register(drop_command)
     CommandManager.register(dropall_command)
     CommandManager.register(clear_command)

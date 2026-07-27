@@ -666,6 +666,13 @@ rl.on('line', (line) => {
                 logInfo('[Sneak] ' + (sneakState ? 'ON' : 'OFF'));
                 break;
 
+            case 'sprint':
+                // 疾跑切换: {type:"sprint", state:true|false|null}
+                const sprintState = data.state != null ? data.state : !bot.getControlState('sprint');
+                bot.setControlState('sprint', sprintState);
+                logInfo('[Sprint] ' + (sprintState ? 'ON' : 'OFF'));
+                break;
+
             case 'clear_inventory':
                 const isCreative = bot.game && bot.game.gameMode === 'creative';
                 if (!isCreative) {

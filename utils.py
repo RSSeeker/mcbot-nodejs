@@ -174,6 +174,11 @@ def send_sneak(state: bool | None = None):
     _send_json({"type": "sneak", "state": state})
     logger.info(f"[Bot → Sneak] {state}")
 
+def send_sprint(state: bool | None = None):
+    """疾跑切换: True=疾跑, False=停止, None=切换"""
+    _send_json({"type": "sprint", "state": state})
+    logger.info(f"[Bot → Sprint] {state}")
+
 
 def send_drop(drop_all: bool = False):
     """丢出物品: drop_all=False 丢出手持, drop_all=True 丢出全部"""
