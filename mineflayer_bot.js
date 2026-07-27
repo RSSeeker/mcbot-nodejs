@@ -781,9 +781,9 @@ rl.on('line', (line) => {
             // ── 骑乘 / 下马 ──
             case 'mount':
                 (async () => {
+                    const mountableNames = ['boat', 'chest_boat', 'minecart', 'horse', 'donkey', 'mule', 'pig', 'strider', 'llama', 'camel', 'skeleton_horse', 'zombie_horse', 'raft', 'bamboo_raft'];
                     const mountEntity = bot.entityAtCursor()
-                        || bot.nearestEntity(e => e.objectType === 'Vehicle'
-                            || ['boat', 'minecart', 'horse', 'donkey', 'mule', 'pig', 'strider', 'llama'].includes(e.name));
+                        || bot.nearestEntity(e => mountableNames.includes(e.name));
                     if (mountEntity) {
                         try {
                             await bot.mount(mountEntity);
