@@ -10,11 +10,12 @@
   **sneak              — 切换潜行（蹲下/起身）
   **drop               — 丢出手持物品
   **dropall            — 丢出背包全部物品
+  **clear              — 创造模式清除物品栏
   **slot <N>           — 切换到物品栏第 N 格 (1-9)
 """
 
 from command_manager import Command
-from utils import send_whisper, send_leftclick, send_leftclick_hold, send_rightclick, send_rightclick_hold, send_cancel, send_look, send_sneak, send_drop, send_switch_slot
+from utils import send_whisper, send_leftclick, send_leftclick_hold, send_rightclick, send_rightclick_hold, send_cancel, send_look, send_sneak, send_drop, send_clear_inventory, send_switch_slot
 import threading
 import time
 
@@ -88,6 +89,11 @@ def _dropall_execute(conn, args: list[str], player: str):
     send_whisper(player, "已丢出全部物品")
 
 
+def _clear_execute(conn, args: list[str], player: str):
+    send_clear_inventory()
+    send_whisper(player, "已尝试清除物品栏（仅创造模式可用）")
+
+
 def _slot_execute(conn, args: list[str], player: str):
     if not args:
         send_whisper(player, "用法: **slot <1-9>")
@@ -139,4 +145,5 @@ cancel_command = Command.literal("cancel").executes(_cancel_execute)
 sneak_command = Command.literal("sneak").executes(_sneak_execute)
 drop_command = Command.literal("drop").executes(_drop_execute)
 dropall_command = Command.literal("dropall").executes(_dropall_execute)
+clear_command = Command.literal("clear").executes(_clear_execute)
 slot_command = Command.literal("slot").executes(_slot_execute)

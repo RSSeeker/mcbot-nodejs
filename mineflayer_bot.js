@@ -562,7 +562,17 @@ rl.on('line', (line) => {
                 // 潜行切换: {type:"sneak", state:true|false|null}
                 const sneakState = data.state != null ? data.state : !bot.getControlState('sneak');
                 bot.setControlState('sneak', sneakState);
-                logInfo(`[Sneak] ${sneakState ? 'ON' : 'OFF'}`);
+                logInfo('[Sneak] ' + (sneakState ? 'ON' : 'OFF'));
+                break;
+
+            case 'clear_inventory':
+                const isCreative = bot.game && bot.game.gameMode === 'creative';
+                if (!isCreative) {
+                    logInfo('[ClearInventory] 仅在创造模式可用');
+                    break;
+                }
+                bot.chat('/clear');
+                logInfo('[ClearInventory] 已执行 /clear 命令');
                 break;
 
             case 'drop':

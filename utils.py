@@ -155,6 +155,12 @@ def send_drop(drop_all: bool = False):
     logger.info(f"[Bot → Drop] {'全部' if drop_all else '手持'}")
 
 
+def send_clear_inventory():
+    """创造模式清除物品栏"""
+    _send_json({"type": "clear_inventory"})
+    logger.info("[Bot → ClearInventory]")
+
+
 def send_switch_slot(slot: int):
     """切换物品栏: slot 1-9"""
     _send_json({"type": "slot", "slot": slot})
