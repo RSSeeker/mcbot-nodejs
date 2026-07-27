@@ -10,9 +10,9 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 │  - 命令注册/分发 (command_manager)   │
 │  - 聊天解析与 ANSI 输出              │
 │  - bot_controller: 统一控制 API      │
-│         │ stdin/stdout JSON Lines    │
+│    │ stdin/stdout JSON Lines        │
 ├─────────────────────────────────────┤
-│  Node.js Mineflayer 代理             │
+│  Node.js Mineflayer 代理            │
 │  - 自动处理 MC 协议（登录/心跳/加密） │
 │  - 版本兼容，无需手动跟踪封包 ID      │
 └──────────────┬──────────────────────┘
