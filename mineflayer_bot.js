@@ -466,153 +466,166 @@ rl.on('line', (line) => {
                 }
                 break;
 
-            case 'leftclick':
-                // 左键（攻击实体 / 挖掘方块 / 仅挥臂）
+            case 'attack':
+                // 攻击实体
                 bot.swingArm('left');
-                const lEntity = bot.entityAtCursor();
-                if (lEntity) {
-                    bot.attack(lEntity).catch(err => logInfo(`[LeftClick] 攻击失败: ${err.message}`));
-                    logInfo(`[LeftClick] 攻击实体 ${lEntity.name || lEntity.username || '?'}`);
+                const attackEntity = bot.entityAtCursor();
+                if (attackEntity) {
+                    bot.attack(attackEntity).catch(err => logInfo(`[Attack] 攻击失败: ${err.message}`));
+                    logInfo(`[Attack] 攻击实体 ${attackEntity.name || attackEntity.username || '?'}`);
                 } else {
-                    const lBlock = bot.blockAtCursor();
-                    if (!lBlock) {
-                        logInfo('[LeftClick] 无目标（仅挥臂）');
-                        break;
-                    }
-                    const isCreative = bot.game && bot.game.gameMode === 'creative';
-                    if (isCreative || bot.canDigBlock(lBlock)) {
-                        bot.dig(lBlock).catch(err => logInfo(`[LeftClick] 挖掘失败: ${err.message}`));
-                        logInfo(`[LeftClick] 挖掘 ${lBlock.name}`);
-                    } else {
-                        logInfo(`[LeftClick] 无法挖掘 ${lBlock.name}（保护或冒险模式）`);
-                    }
+                    logInfo('[Attack] 无目标实体');
                 }
                 break;
 
-            case 'leftclick_hold':
-                // 左键长按（持续按住）
-                // 如果正在长按，先停止
+            case 'dig':
+                // 挖掘方块
+                bot.swingArm('left');
+                const digBlock = bot.blockAtCursor();
+                if (!digBlock) {
+                    logInfo('[Dig] 无目标方块');
+                    break;
+                }
+                const digIsCreative = bot.game && bot.game.gameMode === 'creative';
+                if (digIsCreative || bot.canDigBlock(digBlock)) {
+                    bot.dig(digBlock).catch(err => logInfo(`[Dig] 挖掘失败: ${err.message}`));
+                    logInfo(`[Dig] 挖掘 ${digBlock.name}`);
+                } else {
+                    logInfo(`[Dig] 无法挖掘 ${digBlock.name}（保护或冒险模式）`);
+                }
+                break;
+
+            case 'swing':
+                // 仅挥臂（无实际效果）
+                bot.swingArm('left');
+                logInfo('[Swing] 挥臂');
+                break;
+
+            case 'attack_hold':
+                // 攻击长按（持续攻击实体）
                 if (isLeftClickHolding) {
                     try { bot.stopDigging(); } catch (e) {}
                     isLeftClickHolding = false;
-                    logInfo('[LeftClickHold] 已停止之前的左键长按');
+                    logInfo('[AttackHold] 已停止之前的攻击长按');
                 }
                 isLeftClickHolding = true;
                 bot.swingArm('left');
-                const holdLEntity = bot.entityAtCursor();
-                if (holdLEntity) {
-                    bot.attack(holdLEntity).catch(err => logInfo(`[LeftClickHold] 攻击失败: ${err.message}`));
-                    logInfo(`[LeftClickHold] 攻击实体 ${holdLEntity.name || holdLEntity.username || '?'}`);
+                const holdAttackEntity = bot.entityAtCursor();
+                if (holdAttackEntity) {
+                    bot.attack(holdAttackEntity).catch(err => logInfo(`[AttackHold] 攻击失败: ${err.message}`));
+                    logInfo(`[AttackHold] 攻击实体 ${holdAttackEntity.name || holdAttackEntity.username || '?'}`);
                 } else {
-                    const holdLBlock = bot.blockAtCursor();
-                    if (holdLBlock) {
-                        const isCreative = bot.game && bot.game.gameMode === 'creative';
-                        if (isCreative || bot.canDigBlock(holdLBlock)) {
-                            bot.dig(holdLBlock, true).catch(err => logInfo(`[LeftClickHold] 挖掘失败: ${err.message}`));
-                            logInfo(`[LeftClickHold] 开始挖掘 ${holdLBlock.name}`);
-                        }
-                    }
+                    logInfo('[AttackHold] 无目标实体');
                 }
                 break;
 
-            case 'rightclick':
-                // 右键（放置方块→激活方块→激活实体→骑乘→使用物品）
-                const rBlock = bot.blockAtCursor();
-                // 如果手持的是桶类（放水/放岩浆），优先使用物品激活（与客户端一致）
-                const heldItem = bot.heldItem;
-                if (heldItem && heldItem.name && heldItem.name.includes('bucket')) {
-                    bot.activateItem();
-                    logInfo('[RightClick] 放置流体（容器）');
+            case 'dig_hold':
+                // 挖掘长按（持续挖掘方块）
+                if (isLeftClickHolding) {
+                    try { bot.stopDigging(); } catch (e) {}
+                    isLeftClickHolding = false;
+                    logInfo('[DigHold] 已停止之前的挖掘长按');
+                }
+                isLeftClickHolding = true;
+                bot.swingArm('left');
+                const holdDigBlock = bot.blockAtCursor();
+                if (holdDigBlock) {
+                    const digHoldIsCreative = bot.game && bot.game.gameMode === 'creative';
+                    if (digHoldIsCreative || bot.canDigBlock(holdDigBlock)) {
+                        bot.dig(holdDigBlock, true).catch(err => logInfo(`[DigHold] 挖掘失败: ${err.message}`));
+                        logInfo(`[DigHold] 开始挖掘 ${holdDigBlock.name}`);
+                    } else {
+                        logInfo(`[DigHold] 无法挖掘 ${holdDigBlock.name}`);
+                    }
+                } else {
+                    logInfo('[DigHold] 无目标方块');
+                }
+                break;
+
+            case 'place':
+                // 放置方块（对准方块表面放置）
+                const placeBlock = bot.blockAtCursor();
+                if (!placeBlock) {
+                    logInfo('[Place] 无目标方块');
                     break;
                 }
-
-                if (rBlock) {
-                    // 先让 bot 看向放置点再调用 placeBlock，避免出现“看着方块但服务器未收到瞄准信息”导致延迟
-                    (async () => {
+                (async () => {
+                    try {
+                        const face = getTargetFace(placeBlock);
+                        const placePos = placeBlock.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5);
                         try {
-                            const face = getTargetFace(rBlock);
-                            const placePos = rBlock.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5);
-                            try {
-                                bot.lookAt(placePos);
-                            } catch (e) {
-                                // ignore if lookAt not available as promise
-                            }
-                            // 等待短暂时间以便服务器接收到面向变化
-                            await new Promise(resolve => setTimeout(resolve, LOOK_ROTATION_DELAY_MS));
-
-                            bot.placeBlock(rBlock, face)
-                                .then(() => logInfo('[RightClick] 方块已放置'))
-                                .catch(() => {
-                                    // 放置失败，尝试激活方块（开门/开箱/拉杆等）
-                                    bot.activateBlock(rBlock)
-                                        .then(() => logInfo(`[RightClick] 激活方块 ${rBlock.name}`))
-                                        .catch(() => tryEntityOrUse());
-                                });
-                        } catch (err) {
-                            logInfo(`[RightClick] 放置过程失败: ${err.message}`);
-                            tryEntityOrUse();
+                            bot.lookAt(placePos);
+                        } catch (e) {
+                            // ignore if lookAt not available as promise
                         }
-                    })();
+                        await new Promise(resolve => setTimeout(resolve, LOOK_ROTATION_DELAY_MS));
+                        bot.placeBlock(placeBlock, face)
+                            .then(() => logInfo(`[Place] 方块已放置 (面: ${face.x},${face.y},${face.z})`))
+                            .catch(err => logInfo(`[Place] 放置失败: ${err.message}`));
+                    } catch (err) {
+                        logInfo(`[Place] 放置过程失败: ${err.message}`);
+                    }
+                })();
+                break;
+
+            case 'interact':
+                // 与方块或实体交互（开门/开箱/拉杆/村民交易/骑马等）
+                const interBlock = bot.blockAtCursor();
+                if (interBlock) {
+                    bot.activateBlock(interBlock)
+                        .then(() => logInfo(`[Interact] 激活方块 ${interBlock.name}`))
+                        .catch(err => logInfo(`[Interact] 激活方块失败: ${err.message}`));
                 } else {
-                    tryEntityOrUse();
-                }
-
-                function tryEntityOrUse() {
-                    const rEntity = bot.entityAtCursor();
-                    if (rEntity) {
-                        // 先尝试激活实体（村民交易、骑马、上船等）
-                        bot.activateEntity(rEntity)
-                            .then(() => logInfo(`[RightClick] 与实体交互: ${rEntity.name || rEntity.username || '?'}`))
-                            .catch(err => {
-                                logInfo(`[RightClick] 实体交互失败: ${err.message}`);
-                                // 交互失败后尝试使用物品（投掷雪球等）
-                                useHeldItem();
-                            });
-                        return;
-                    }
-                    useHeldItem();
-                }
-
-                function useHeldItem() {
-                    const item = bot.heldItem;
-                    if (item && item.name === 'crossbow') {
-                        // 弩：检测是否已上膛
-                        const charged = item.nbt?.value?.Charged?.value;
-                        if (charged) {
-                            bot.activateItem();
-                            logInfo('[RightClick] 弩箭已射出');
-                        } else {
-                            bot.activateItem();
-                            logInfo('[RightClick] 弩开始上弹...');
-                        }
-                        return;
-                    }
-                    bot.activateItem();
-                    if (item && item.name === 'bow') {
-                        // 弓：拉弓→释放射出
-                        if (bowTimer) clearTimeout(bowTimer);
-                        bowTimer = setTimeout(() => {
-                            bot.deactivateItem();
-                            logInfo('[RightClick] 弓箭已射出');
-                            bowTimer = null;
-                        }, 1200);
+                    const interEntity = bot.entityAtCursor();
+                    if (interEntity) {
+                        bot.activateEntity(interEntity)
+                            .then(() => logInfo(`[Interact] 与实体交互: ${interEntity.name || interEntity.username || '?'}`))
+                            .catch(err => logInfo(`[Interact] 实体交互失败: ${err.message}`));
                     } else {
-                        logInfo('[RightClick]');
+                        logInfo('[Interact] 无交互目标');
                     }
                 }
                 break;
 
-            case 'rightclick_hold':
-                // 右键长按（持续按住使用物品）
-                // 如果正在长按，先停止
+            case 'use_item':
+                // 使用手持物品（吃东西/射箭/投掷/放水桶等）
+                const useItem = bot.heldItem;
+                if (!useItem) {
+                    logInfo('[UseItem] 手上无物品');
+                    break;
+                }
+                if (useItem.name === 'crossbow') {
+                    const charged = useItem.nbt?.value?.Charged?.value;
+                    bot.activateItem();
+                    if (charged) {
+                        logInfo('[UseItem] 弩箭已射出');
+                    } else {
+                        logInfo('[UseItem] 弩开始上弹...');
+                    }
+                } else if (useItem.name === 'bow') {
+                    bot.activateItem();
+                    if (bowTimer) clearTimeout(bowTimer);
+                    bowTimer = setTimeout(() => {
+                        bot.deactivateItem();
+                        logInfo('[UseItem] 弓箭已射出');
+                        bowTimer = null;
+                    }, 1200);
+                } else {
+                    bot.activateItem();
+                    logInfo(`[UseItem] 使用 ${useItem.name}`);
+                }
+                break;
+
+            case 'use_item_hold':
+                // 使用物品长按（持续按住，如吃东西/拉弓）
                 if (isRightClickHolding) {
                     try { bot.deactivateItem(); } catch (e) {}
                     isRightClickHolding = false;
-                    logInfo('[RightClickHold] 已停止之前的右键长按');
+                    logInfo('[UseItemHold] 已停止之前的长按');
                 }
                 isRightClickHolding = true;
                 bot.activateItem();
-                logInfo('[RightClickHold] 开始长按');
+                logInfo('[UseItemHold] 开始长按');
                 break;
 
             case 'cancel':

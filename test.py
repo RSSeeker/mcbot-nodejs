@@ -226,16 +226,16 @@ def test_get_status(bot):
     )
 
 
-@test("左键点击")
-def test_left_click(bot):
-    """左键挥臂"""
-    bot.left_click()
+@test("攻击")
+def test_attack(bot):
+    """攻击实体"""
+    bot.attack()
 
 
-@test("右键点击")
-def test_right_click(bot):
+@test("交互")
+def test_interact(bot):
     """右键交互"""
-    bot.right_click()
+    bot.interact()
 
 
 @test("组合场景: 移动+跳跃")
@@ -285,8 +285,8 @@ ALL_TESTS = [
     test_switch_slot,
     test_drop,
     test_get_status,
-    test_left_click,
-    test_right_click,
+    test_attack,
+    test_interact,
     test_combo_move_jump,
 ]
 
@@ -309,8 +309,10 @@ def run_interactive(bot: BotController):
     print("    bot.jump()           — 跳跃")
     print("    bot.stop()           — 停止")
     print("    bot.look(yaw, pitch) — 视角")
-    print("    bot.left_click()     — 左键")
-    print("    bot.right_click()    — 右键")
+    print("    bot.attack()         — 攻击")
+    print("    bot.interact()       — 交互")
+    print("    bot.place()          — 放置方块")
+    print("    bot.use_item()       — 使用物品")
     print("    bot.sneak()          — 潜行")
     print("    bot.sprint()         — 疾跑")
     print("    bot.drop()           — 丢出物品")

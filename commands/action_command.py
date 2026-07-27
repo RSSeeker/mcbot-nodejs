@@ -1,27 +1,31 @@
 """
 动作命令:
-  **look <偏航> [俯仰] — 设置视角角度（如 **look 180 0）
-  **look at <玩家>     — 看向指定玩家
-  **leftclick [时间]    — 左键点击（攻击视线中的实体 / 挖掘方块）
-                         时间参数: 指定长按毫秒数，如 **leftclick 2000（长按2秒）
-  **rightclick [时间]   — 右键点击（放置方块 / 激活方块 / 实体交互 / 使用物品）
-                         时间参数: 指定长按毫秒数，如 **rightclick 3000（长按3秒）
-  **cancel             — 取消所有操作（停止挖掘/使用物品/弓箭/移动）
-  **sneak              — 切换潜行（蹲下/起身）
-  **drop               — 丢出手持物品
-  **dropall            — 丢出背包全部物品
-  **clear              — 创造模式清除物品栏
-  **slot <N>           — 切换到物品栏第 N 格 (1-9)
+  **look <偏航> [俯仰]  — 设置视角角度（如 **look 180 0）
+  **look at <玩家>      — 看向指定玩家
+  **attack [时间]        — 攻击视线中的实体
+                           时间参数: 指定长按毫秒数，如 **attack 2000（长按2秒）
+  **dig [时间]           — 挖掘视线中的方块
+                           时间参数: 指定长按毫秒数，如 **dig 2000（长按2秒）
+  **place               — 放置方块（对准方块表面）
+  **interact            — 与方块或实体交互（开门/开箱/村民交易/骑马等）
+  **use                 — 使用手持物品（吃东西/射箭/投掷/放水桶等）
+  **usehold [时间]       — 长按使用手持物品（如 **usehold 2000）
+  **cancel              — 取消所有操作（停止挖掘/使用物品/弓箭/移动）
+  **sneak               — 切换潜行（蹲下/起身）
+  **drop                — 丢出手持物品
+  **dropall             — 丢出背包全部物品
+  **clear               — 创造模式清除物品栏
+  **slot <N>            — 切换到物品栏第 N 格 (1-9)
 """
 
 from command_manager import Command
-from utils import send_whisper, send_leftclick, send_leftclick_hold, send_rightclick, send_rightclick_hold, send_cancel, send_look, send_sneak, send_drop, send_clear_inventory, send_switch_slot
+from utils import send_whisper, send_attack, send_attack_hold, send_dig, send_dig_hold, send_place, send_interact, send_use_item, send_use_item_hold, send_cancel, send_look, send_sneak, send_drop, send_clear_inventory, send_switch_slot
 import threading
 import time
 
 
-def _leftclick_execute(conn, args: list[str], player: str):
-    """左键点击/长按"""
+def _attack_execute(conn, args: list[str], player: str):
+    """攻击实体"""
     duration = None
     if args:
         try:
@@ -32,23 +36,21 @@ def _leftclick_execute(conn, args: list[str], player: str):
             pass
     
     if duration:
-        # 长按模式：开始长按，然后定时取消
-        send_leftclick_hold()
-        send_whisper(player, f"左键长按开始，持续 {duration}ms")
+        send_attack_hold()
+        send_whisper(player, f"攻击长按开始，持续 {duration}ms")
         
         def release():
             send_cancel()
-            send_whisper(player, "左键长按结束")
+            send_whisper(player, "攻击长按结束")
         
         threading.Thread(target=lambda: (time.sleep(duration/1000), release()), daemon=True).start()
     else:
-        # 普通点击（与真实玩家行为一致）
-        send_leftclick()
-        send_whisper(player, "已执行左键点击")
+        send_attack()
+        send_whisper(player, "已执行攻击")
 
 
-def _rightclick_execute(conn, args: list[str], player: str):
-    """右键点击/长按（与真实玩家行为一致）"""
+def _dig_execute(conn, args: list[str], player: str):
+    """挖掘方块"""
     duration = None
     if args:
         try:
@@ -59,19 +61,56 @@ def _rightclick_execute(conn, args: list[str], player: str):
             pass
     
     if duration:
-        # 长按模式：开始长按，然后定时取消
-        send_rightclick_hold()
-        send_whisper(player, f"右键长按开始，持续 {duration}ms")
+        send_dig_hold()
+        send_whisper(player, f"挖掘长按开始，持续 {duration}ms")
         
         def release():
             send_cancel()
-            send_whisper(player, "右键长按结束")
+            send_whisper(player, "挖掘长按结束")
         
         threading.Thread(target=lambda: (time.sleep(duration/1000), release()), daemon=True).start()
     else:
-        # 普通点击（与真实玩家行为一致）
-        send_rightclick()
-        send_whisper(player, "已执行右键点击")
+        send_dig()
+        send_whisper(player, "已执行挖掘")
+
+
+def _place_execute(conn, args: list[str], player: str):
+    """放置方块"""
+    send_place()
+    send_whisper(player, "已执行放置方块")
+
+
+def _interact_execute(conn, args: list[str], player: str):
+    """与方块或实体交互"""
+    send_interact()
+    send_whisper(player, "已执行交互")
+
+
+def _use_execute(conn, args: list[str], player: str):
+    """使用手持物品"""
+    send_use_item()
+    send_whisper(player, "已执行使用物品")
+
+
+def _usehold_execute(conn, args: list[str], player: str):
+    """长按使用手持物品"""
+    duration = 2000  # 默认2秒
+    if args:
+        try:
+            d = int(args[0])
+            if d > 0:
+                duration = d
+        except ValueError:
+            pass
+    
+    send_use_item_hold()
+    send_whisper(player, f"使用物品长按开始，持续 {duration}ms")
+    
+    def release():
+        send_cancel()
+        send_whisper(player, "使用物品长按结束")
+    
+    threading.Thread(target=lambda: (time.sleep(duration/1000), release()), daemon=True).start()
 
 
 def _sneak_execute(conn, args: list[str], player: str):
@@ -138,8 +177,12 @@ def _look_execute(conn, args: list[str], player: str):
     send_look(yaw=yaw_rad, pitch=pitch_rad)
 
 
-leftclick_command = Command.literal("leftclick").executes(_leftclick_execute)
-rightclick_command = Command.literal("rightclick").executes(_rightclick_execute)
+attack_command = Command.literal("attack").executes(_attack_execute)
+dig_command = Command.literal("dig").executes(_dig_execute)
+place_command = Command.literal("place").executes(_place_execute)
+interact_command = Command.literal("interact").executes(_interact_execute)
+use_command = Command.literal("use").executes(_use_execute)
+usehold_command = Command.literal("usehold").executes(_usehold_execute)
 look_command = Command.literal("look").executes(_look_execute)
 cancel_command = Command.literal("cancel").executes(_cancel_execute)
 sneak_command = Command.literal("sneak").executes(_sneak_execute)

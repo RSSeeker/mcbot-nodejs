@@ -121,26 +121,52 @@ def send_follow(player: str, distance: float = 2.0):
     logger.info(f"[Bot → Follow] {player}")
 
 
-def send_leftclick():
-    """左键点击（攻击/挖掘）"""
-    _send_json({"type": "leftclick"})
+def send_attack():
+    """攻击视线中的实体"""
+    _send_json({"type": "attack"})
 
 
-def send_leftclick_hold():
-    """左键长按（持续按住）"""
-    _send_json({"type": "leftclick_hold"})
-    logger.info("[Bot → LeftClickHold]")
+def send_attack_hold():
+    """攻击长按（持续攻击实体）"""
+    _send_json({"type": "attack_hold"})
+    logger.info("[Bot → AttackHold]")
 
 
-def send_rightclick():
-    """右键点击（使用物品/放置方块/交互）"""
-    _send_json({"type": "rightclick"})
+def send_dig():
+    """挖掘视线中的方块"""
+    _send_json({"type": "dig"})
 
 
-def send_rightclick_hold():
-    """右键长按（持续按住使用物品）"""
-    _send_json({"type": "rightclick_hold"})
-    logger.info("[Bot → RightClickHold]")
+def send_dig_hold():
+    """挖掘长按（持续挖掘方块）"""
+    _send_json({"type": "dig_hold"})
+    logger.info("[Bot → DigHold]")
+
+
+def send_swing():
+    """仅挥臂（无实际效果）"""
+    _send_json({"type": "swing"})
+
+
+def send_place():
+    """放置方块（对准方块表面）"""
+    _send_json({"type": "place"})
+
+
+def send_interact():
+    """与方块或实体交互（开门/开箱/村民交易/骑马等）"""
+    _send_json({"type": "interact"})
+
+
+def send_use_item():
+    """使用手持物品（吃东西/射箭/投掷/放水桶等）"""
+    _send_json({"type": "use_item"})
+
+
+def send_use_item_hold():
+    """使用物品长按（持续按住，如吃东西/拉弓）"""
+    _send_json({"type": "use_item_hold"})
+    logger.info("[Bot → UseItemHold]")
 
 
 def send_sneak(state: bool | None = None):

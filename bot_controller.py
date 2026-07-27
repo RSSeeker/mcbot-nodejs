@@ -26,7 +26,9 @@ from utils import (
     send_chat, send_whisper, send_command,
     send_respawn, send_quit,
     send_move, send_jump, send_stop, send_goto, send_follow,
-    send_leftclick, send_rightclick, send_cancel, send_sneak, send_drop, send_switch_slot,
+    send_attack, send_attack_hold, send_dig, send_dig_hold,
+    send_place, send_interact, send_use_item, send_use_item_hold,
+    send_cancel, send_sneak, send_drop, send_switch_slot,
     send_look,
     send_activate_item, send_deactivate_item, send_equip, send_mount, send_dismount,
     send_set_control_state, send_status_request,
@@ -305,13 +307,41 @@ class BotController:
     #  动作
     # ═══════════════════════════════════
 
-    def left_click(self):
-        """左键（攻击实体 / 挖掘方块）"""
-        send_leftclick()
+    def attack(self):
+        """攻击视线中的实体"""
+        send_attack()
 
-    def right_click(self):
-        """右键（放置方块 / 激活方块 / 交互实体 / 使用物品）"""
-        send_rightclick()
+    def attack_hold(self):
+        """攻击长按（持续攻击实体）"""
+        send_attack_hold()
+
+    def dig(self):
+        """挖掘视线中的方块"""
+        send_dig()
+
+    def dig_hold(self):
+        """挖掘长按（持续挖掘方块）"""
+        send_dig_hold()
+
+    def swing(self):
+        """仅挥臂（无实际效果）"""
+        pass
+
+    def place(self):
+        """放置方块（对准方块表面）"""
+        send_place()
+
+    def interact(self):
+        """与方块或实体交互（开门/开箱/村民交易/骑马等）"""
+        send_interact()
+
+    def use_item(self):
+        """使用手持物品（吃东西/射箭/投掷/放水桶等，自动处理弩/弓时序）"""
+        send_use_item()
+
+    def use_item_hold(self):
+        """使用物品长按（持续按住，如吃东西/拉弓）"""
+        send_use_item_hold()
 
     def sneak(self, state: bool | None = None):
         """潜行切换
@@ -364,12 +394,12 @@ class BotController:
     #  物品
     # ═══════════════════════════════════
 
-    def use_item(self):
-        """开始使用手持物品（吃东西/拉弓/上弹等）"""
+    def activate_item(self):
+        """开始使用手持物品（吃东西/拉弓/上弹等，低层控制）"""
         send_activate_item()
 
-    def stop_use_item(self):
-        """停止使用手持物品（放箭/停止进食等）"""
+    def deactivate_item(self):
+        """停止使用手持物品（放箭/停止进食等，低层控制）"""
         send_deactivate_item()
 
     def drop(self):
