@@ -362,7 +362,18 @@ rl.on('line', (line) => {
                     logInfo('[Goto] 移动配置未初始化');
                     break;
                 }
+                // 停止手动移动（pathfinder.goto 会自动处理）
+                if (moveTimer) {
+                    clearTimeout(moveTimer);
+                    moveTimer = null;
+                }
+                if (activeMoveDir) {
+                    bot.setControlState(activeMoveDir, false);
+                    activeMoveDir = null;
+                }
+                bot.pathfinder.setMovements(movements);
                 bot.pathfinder.goto(new GoalBlock(data.x, data.y, data.z))
+                    .then(() => logInfo(`[Goto] 到达目标`))
                     .catch(err => logInfo(`[Goto] 寻路失败: ${err.message}`));
                 logInfo(`[Goto] ${data.x} ${data.y} ${data.z}`);
                 break;
@@ -378,7 +389,19 @@ rl.on('line', (line) => {
                     logInfo('[Follow] 移动配置未初始化');
                     break;
                 }
+                // 先停止之前的移动（但不停止 pathfinder，goto 会自动替换目标）
+                if (moveTimer) {
+                    clearTimeout(moveTimer);
+                    moveTimer = null;
+                }
+                if (activeMoveDir) {
+                    bot.setControlState(activeMoveDir, false);
+                    activeMoveDir = null;
+                }
+                // 重新设置移动配置确保有效
+                bot.pathfinder.setMovements(movements);
                 bot.pathfinder.goto(new GoalFollow(target.entity, data.distance || 2))
+                    .then(() => logInfo(`[Follow] 到达目标附近`))
                     .catch(err => logInfo(`[Follow] 跟随失败: ${err.message}`));
                 logInfo(`[Follow] ${data.player} distance=${data.distance || 2}`);
                 break;
