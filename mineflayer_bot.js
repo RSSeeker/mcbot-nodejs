@@ -814,14 +814,16 @@ rl.on('line', (line) => {
                 break;
 
             case 'dismount':
-                (async () => {
-                    try {
-                        await bot.dismount();
-                        logInfo('[Dismount] 已下马');
-                    } catch (err) {
-                        logInfo(`[Dismount] 失败: ${err.message}`);
-                    }
-                })();
+                // 离开载具（通过发送潜行键模拟，Minecraft 原版下马方式）
+                if (!bot.vehicle) {
+                    logInfo('[Dismount] 当前未骑乘任何载具');
+                    break;
+                }
+                bot.setControlState('sneak', true);
+                setTimeout(() => {
+                    bot.setControlState('sneak', false);
+                    logInfo('[Dismount] 已离开载具');
+                }, 100);
                 break;
 
             // ── 通用控制状态 ──
