@@ -249,12 +249,7 @@ function stopMove() {
         moveTimer = null;
     }
     if (activeMoveDir) {
-        // 如果正在骑乘，发送零值移动指令停止载具
-        if (bot.vehicle) {
-            bot.moveVehicle(0, 0);
-        } else {
-            bot.setControlState(activeMoveDir, false);
-        }
+        bot.setControlState(activeMoveDir, false);
         activeMoveDir = null;
     }
     // 停止 pathfinder 寻路
@@ -263,30 +258,12 @@ function stopMove() {
 
 function startMove(dir, duration) {
     stopMove();
-    if (bot.vehicle) {
-        // 骑乘时使用 moveVehicle 控制载具
-        const moveMap = {
-            forward:  [0, 1.0],
-            back:     [0, -1.0],
-            left:     [-1.0, 0],
-            right:    [1.0, 0],
-        };
-        const [left, forward] = moveMap[dir] || [0, 0];
-        bot.moveVehicle(left, forward);
-        activeMoveDir = dir;
-        if (duration > 0) {
-            moveTimer = setTimeout(() => {
-                stopMove();
-            }, duration);
-        }
-    } else {
-        bot.setControlState(dir, true);
-        activeMoveDir = dir;
-        if (duration > 0) {
-            moveTimer = setTimeout(() => {
-                stopMove();
-            }, duration);
-        }
+    bot.setControlState(dir, true);
+    activeMoveDir = dir;
+    if (duration > 0) {
+        moveTimer = setTimeout(() => {
+            stopMove();
+        }, duration);
     }
 }
 
