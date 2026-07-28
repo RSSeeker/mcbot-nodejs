@@ -1,36 +1,40 @@
 # mcbot-python
 
-Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理协议层，**Python** 实现命令控制等业务逻辑。
+Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理协议层，**Python** 实现命令控制等业务逻辑。支持**终端模式**和**Web 控制台**两种运行方式。
 
 ## 架构
 
 ```
-┌─────────────────────────────────────┐
-│  Python 控制层 (main.py)            │
-│  - 命令注册/分发 (command_manager)   │
-│  - 聊天解析与 ANSI 输出              │
-│  - bot_controller: 统一控制 API      │
-│    │ stdin/stdout JSON Lines        │
-├─────────────────────────────────────┤
-│  Node.js Mineflayer 代理            │
-│  - 自动处理 MC 协议（登录/心跳/加密） │
-│  - 版本兼容，无需手动跟踪封包 ID      │
-└──────────────┬──────────────────────┘
-               │ TCP
-        Minecraft 服务器
+终端模式:                          Web 模式:
+┌─────────────────────────────┐   ┌──────────────────────────────┐
+│  Python 控制层 (main.py)    │   │  Flask Web 控制层 (web_app.py)│
+│  - 命令注册/分发             │   │  - SocketIO 实时通信           │
+│  - 聊天解析与 ANSI 输出      │   │  - Web 控制面板 (index.html)   │
+│  - bot_controller: 统一 API │   │  - bot_controller: 统一 API   │
+│    │ stdin/stdout JSON Lines│   │    │ stdin/stdout JSON Lines  │
+├─────────────────────────────┤   ├──────────────────────────────┤
+│  Node.js Mineflayer 代理    │   │  Node.js Mineflayer 代理      │
+│  - 自动处理 MC 协议          │   │  - 自动处理 MC 协议            │
+│  - 版本兼容                  │   │  - 版本兼容                    │
+└──────────┬──────────────────┘   └──────────┬───────────────────┘
+           │ TCP                             │ TCP
+    Minecraft 服务器                    Minecraft 服务器
 ```
 
 ## 功能特性
 
 - **Mineflayer 协议代理**：Node.js Mineflayer 处理所有 MC 协议细节，兼容多版本
+- **Web 控制台**：Flask + SocketIO 实时 Web 面板，可视化移动控制、视角转动、状态监控
 - **聊天监听与命令响应**：监听公聊/私聊消息，响应 `command_prefix` 开头的玩家指令
 - **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
 - **交互式控制台**：终端可直接发送聊天/Bot 命令/MC 指令
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
+- **视角转动**：D-pad 方向键/键盘箭头增量旋转视角，支持绝对角度设置
 - **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/开箱/骑乘等）、使用物品（自动处理弩/弓时序）、潜行、疾跑、丢物品、切格子
-- **实体交互**：骑乘、下马、装备物品
-- **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品
-- **自动恢复**：死亡自动重生、断连自动重连（指数退避）
+- **背包管理**：背包物品移入快捷栏、装备/卸下物品
+- **实体交互**：骑乘、下马
+- **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品/潜行/疾跑/爬行/骑乘状态
+- **自动恢复**：死亡自动重生、断连自动重连（指数退避）、Web 面板一键重启
 - **玩家上下线追踪**：配置 `track_players` 后，指定玩家上下线时终端醒目提示
 - **测试命令**：游戏内 `**test` 运行自定义测试（框架模式，用户可添加自己的测试）
 
@@ -38,7 +42,8 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 
 ```
 mcbot-python/
-├── main.py               # Python 入口：启动 Node 子进程、IPC 事件循环
+├── main.py               # Python 入口（终端模式）：启动 Node 子进程、IPC 事件循环
+├── web_app.py            # Web 控制台入口：Flask + SocketIO 实时面板
 ├── mineflayer_bot.js     # Mineflayer 代理：登录、消息收发、IPC 通信
 ├── bot_controller.py     # Bot 统一控制 API（可直接 import 使用）
 ├── chat_processor.py     # 聊天解析：JSON → 纯文本 + ANSI 输出
@@ -55,8 +60,11 @@ mcbot-python/
 │   ├── respawn_command.py  # **respawn — 让 Bot 重生
 │   ├── restart_command.py  # **restart — 重启 Bot 进程
 │   ├── move_command.py     # **move/jump/stop/goto/follow — 移动控制
-│   ├── action_command.py   # **attack/dig/place/interact/use/sneak/drop/dropall/slot/look/cancel/dismount — 动作交互
-│   └── test_command.py     # **test — 自定义测试框架
+│   ├── action_command.py   # **attack/dig/place/interact/use/sneak/sprint/drop/dropall/slot/look/rotate/cancel/dismount — 动作交互
+│   ├── test_command.py     # **test — 自定义测试框架
+│   └── ping_command.py     # **ping — 网络延迟测试
+├── templates/
+│   └── index.html          # Web 控制台前端页面
 ├── config.json             # 配置文件（服务器/用户名/密码/指令前缀）
 ├── config.example.json     # 配置文件模板
 ├── requirements.txt        # Python 依赖
@@ -124,6 +132,25 @@ python main.py
 - `/` 开头 → Bot 执行 Minecraft 指令
 - `quit` → 退出程序
 
+### Web 控制台模式
+
+```bash
+python web_app.py
+```
+
+启动后在浏览器访问 `http://localhost:5000` 即可打开可视控制面板，功能包括：
+
+- **连接配置**：网页顶部填写服务器/用户名/密码等
+- **移动控制**：D-pad 方向键 + 跳跃/潜行/疾跑切换按钮，支持键盘 WASD/Q/E/F/Shift/Ctrl
+- **视角转动**：独立的视角 D-pad，键盘方向键控制，支持 Yaw/Pitch 精确输入
+- **状态面板**：实时显示坐标、血量、饱食度、视角、手持物品、潜行/疾跑/爬行/骑乘状态
+- **物品栏**：快捷栏 1-9 点击切换，一键移入背包物品
+- **动作按钮**：攻击、挖掘、放置、交互、使用、下马、丢物品
+- **聊天面板**：实时公聊/私聊/系统消息，支持聊天输入和 Minecraft 指令执行
+- **寻路/跟随**：输入坐标或玩家名进行导航
+- **装备控制**：指定物品名装备到指定槽位，一键卸下
+- **重启**：Bot 连接后一键重启
+
 ### 运行测试
 
 ```bash
@@ -174,6 +201,7 @@ python ping_server.py
 | `**follow <玩家>` | 跟随指定玩家 |
 | `**look <偏航> [俯仰]` | 设置视角角度 |
 | `**look at <玩家>` | 看向指定玩家 |
+| `**rotate <水平°> [垂直°]` | 旋转视角（增量角度，如 `**rotate 90 -30`） |
 | `**attack [时间]` | 攻击视线中的实体，时间参数指定长按毫秒数 |
 | `**dig [时间]` | 挖掘视线中的方块，时间参数指定长按毫秒数 |
 | `**place` | 放置方块（对准方块表面） |
@@ -186,7 +214,10 @@ python ping_server.py
 | `**drop` | 丢出手持物品 |
 | `**dropall` | 丢出全部物品 |
 | `**clear` | 创造模式清除物品栏 |
-| `**slot <1-44>` | 切换到物品栏第 N 格（1-9 快捷栏，10-36 背包，37-44 装备栏） |
+| `**slot <1-9>` | 切换到快捷栏第 N 格 |
+| `**equip <物品名> <槽位>` | 装备物品到指定槽位（hand/off-hand/head/torso/legs/feet） |
+| `**unequip <槽位>` | 卸下指定槽位的物品 |
+| `**movetohotbar` | 将背包物品移入快捷栏的空位 |
 | `**cancel` | 取消所有操作 |
 | `**respawn` | 重生 |
 | `**restart` | 重启 Bot 进程 |
@@ -221,7 +252,8 @@ bot.chat("Hello!")               # 公聊
 bot.whisper("玩家名", "你好")      # 私聊
 bot.move_forward(3000)            # 前进 3 秒
 bot.jump()                        # 跳跃
-bot.look(90, 0)                   # 设置视角
+bot.look(90, 0)                   # 设置绝对视角
+bot.rotate(90, 0)                 # 增量旋转视角（度）
 bot.attack()                     # 攻击实体
 bot.dig()                        # 挖掘方块
 bot.place()                      # 放置方块
@@ -260,7 +292,9 @@ with BotController() as bot:
 
 ### Python
 
-全部使用标准库：`subprocess`、`threading`、`json`、`re`、`logging`、`os`、`time`、`argparse`
+- `flask` — Web 框架（Web 控制台模式）
+- `flask-socketio` — WebSocket 实时通信（Web 控制台模式）
+- 其余全部使用标准库：`subprocess`、`threading`、`json`、`re`、`logging`、`os`、`time`、`argparse`
 
 ### Node.js
 
