@@ -31,6 +31,7 @@ Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理�
 - **实体交互**：骑乘、下马、装备物品
 - **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品
 - **自动恢复**：死亡自动重生、断连自动重连（指数退避）
+- **玩家上下线追踪**：配置 `track_players` 后，指定玩家上下线时终端醒目提示
 - **测试命令**：游戏内 `**test` 运行自定义测试（框架模式，用户可添加自己的测试）
 
 ## 项目结构
@@ -45,6 +46,7 @@ mcbot-python/
 ├── utils.py              # IPC 工具函数（自动读取 config.json）
 ├── test.py               # 功能测试脚本（19 项测试）
 ├── ping_server.py        # 独立工具：探测服务器版本和在线人数
+├── player_tracker.py     # 指定玩家上下线追踪模块
 ├── commands/
 │   ├── __init__.py         # 命令注册入口
 │   ├── help_command.py     # **help — 列出所有命令
@@ -94,7 +96,8 @@ npm install
         "username": "Bot名称",
         "password": "登录密码（无密码留空）"
     },
-    "command_prefix": "**"
+    "command_prefix": "**",
+    "track_players": ["玩家名1", "玩家名2"]
 }
 ```
 
@@ -106,6 +109,7 @@ npm install
 | `bot.username` | Bot 用户名 |
 | `bot.password` | 登录密码（离线模式留空） |
 | `command_prefix` | 游戏内指令前缀，可改为 `!`、`/` 等 |
+| `track_players` | 需要追踪上下线的玩家名列表，留空 `[]` 则不启用追踪 |
 
 ### 运行
 
@@ -132,6 +136,26 @@ python test.py --interactive # 交互模式
 
 ```bash
 python ping_server.py
+```
+
+### 玩家上下线追踪
+
+在 `config.json` 中配置 `track_players` 即可启用：
+
+```json
+{
+    "track_players": ["Steve", "Alex"]
+}
+```
+
+- 留空 `[]` 或不填此字段 → 功能关闭
+- 支持追踪多个玩家
+- 当被追踪的玩家上线/下线时，终端会以醒目样式显示（绿色 ▲ 上线，红色 ▼ 下线）
+
+```
+==================================================
+  ▲ [玩家追踪] Steve 上线了！
+==================================================
 ```
 
 ## 可用命令（游戏中）
