@@ -20,6 +20,7 @@ import threading
 from chat_processor import process_chat
 from command_manager import CommandManager
 from commands import register_all
+from player_tracker import handle_player_joined, handle_player_left
 from utils import set_stdin, send_chat, send_command
 
 # ── 加载配置 ──
@@ -118,6 +119,12 @@ def main():
 
             elif etype == "spawn":
                 logger.info("Bot 已就绪，等待命令...")
+
+            elif etype == "player_joined":
+                handle_player_joined(event.get("username", ""))
+
+            elif etype == "player_left":
+                handle_player_left(event.get("username", ""))
 
     event_thread = threading.Thread(target=_process_node_events, daemon=True)
     event_thread.start()
