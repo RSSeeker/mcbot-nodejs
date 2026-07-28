@@ -903,13 +903,19 @@
             socket.emit('unequip', { destination: dest });
         }
 
+        const movementKeys = { w: 'forward', a: 'left', s: 'back', d: 'right' };
+        const activeKeys = new Set();
+
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT') return;
-            switch (e.key.toLowerCase()) {
-                case 'w': startMove('forward'); break;
-                case 'a': startMove('left'); break;
-                case 's': startMove('back'); break;
-                case 'd': startMove('right'); break;
+            const key = e.key.toLowerCase();
+            if (movementKeys[key]) {
+                if (activeKeys.has(key)) return;
+                activeKeys.add(key);
+                startMove(movementKeys[key]);
+                return;
+            }
+            switch (key) {
                 case ' ': e.preventDefault(); doJump(); break;
                 case 'shift': toggleSneak(); break;
                 case 'control': toggleSprint(); break;
@@ -924,10 +930,17 @@
         });
 
         document.addEventListener('keyup', (e) => {
-            switch (e.key.toLowerCase()) {
-                case 'w': case 'a': case 's': case 'd':
-                    stopMove();
-                    break;
+            const key = e.key.toLowerCase();
+            if (movementKeys[key]) {
+                activeKeys.delete(key);
+                socket.emit('set_control', { control: movementKeys[key], state: false });
+                const btnMap = { forward: 'btnW', back: 'btnS', left: 'btnA', right: 'btnD' };
+                const btn = document.getElementById(btnMap[movementKeys[key]]);
+                if (btn) btn.classList.remove('active');
+                if (activeKeys.size === 0) stopMove();
+                return;
+            }
+            switch (key) {
                 case 'arrowleft': case 'arrowright': case 'arrowup': case 'arrowdown':
                     stopRotate();
                     break;

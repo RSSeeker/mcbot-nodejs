@@ -41,6 +41,8 @@ let moveTimer = null;
 let activeMoveDir = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
+let shouldReconnect = true;
+let restarting = false;
 let bowTimer = null;
 let isLeftClickHolding = false;
 let isRightClickHolding = false;
@@ -83,6 +85,7 @@ function createBot(overrides = {}) {
     if (moveTimer) { clearTimeout(moveTimer); moveTimer = null; }
     if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    shouldReconnect = true;
     activeMoveDir = null;
     movements = null;
 
@@ -122,6 +125,7 @@ function createBot(overrides = {}) {
     });
 
     bot.on('chat', (playerName, message) => {
+        if (!bot) return;
         if (playerName === bot.username) return;
         chatLog.push({ sender: playerName, message, time: Date.now() / 1000 });
         io.emit('chat_msg', { sender: playerName, message });
@@ -179,8 +183,9 @@ function createBot(overrides = {}) {
 
         if (password) {
             setTimeout(() => {
+                if (restarting || !bot) return;
                 bot.chat(`/register ${password} ${password}`);
-                setTimeout(() => bot.chat(`/login ${password}`), 1500);
+                setTimeout(() => { if (!restarting && bot) bot.chat(`/login ${password}`); }, 1500);
             }, 1000);
         }
 
@@ -191,6 +196,7 @@ function createBot(overrides = {}) {
 }
 
 function scheduleReconnect(extraDelayMs = 0) {
+    if (!shouldReconnect) return;
     if (reconnectTimer) return;
     reconnectAttempts++;
     const backoff = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
@@ -201,6 +207,18 @@ function scheduleReconnect(extraDelayMs = 0) {
         reconnectTimer = null;
         createBot();
     }, delay);
+}
+
+function doProcessRestart() {
+    restarting = true;
+    shouldReconnect = false;
+    if (bot) {
+        try { bot.quit(); } catch (e) {}
+    }
+    server.close(() => {
+        process.exit(100);
+    });
+    setTimeout(() => process.exit(100), 3000);
 }
 
 // ── 状态轮询 ──
@@ -255,6 +273,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect_bot', () => {
+        shouldReconnect = false;
         if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
         if (bot) {
             try { bot.quit(); } catch (e) {}
@@ -267,21 +286,9 @@ io.on('connection', (socket) => {
     });
 
     socket.on('restart_bot', () => {
-        const lastOverrides = {
-            host: currentStatus.host,
-            port: currentStatus.port,
-            username: currentStatus.username,
-            version: config.server.version,
-        };
-        if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
-        if (bot) {
-            try { bot.quit(); } catch (e) {}
-            bot = null;
-        }
-        currentStatus.connected = false;
-        io.emit('bot_disconnected');
-        io.emit('log', { level: 'info', msg: 'Bot 正在重启...' });
-        setTimeout(() => createBot(lastOverrides), 500);
+        io.emit('log', { level: 'info', msg: '正在进程级重启...' });
+        addEvent('info', '进程级重启');
+        doProcessRestart();
     });
 
     socket.on('chat', (data) => {
@@ -439,6 +446,20 @@ io.on('connection', (socket) => {
             socket.emit('status', currentStatus);
         }
     });
+
+    socket.on('disconnect', () => {
+        shouldReconnect = false;
+        log('info', 'Web 客户端已断开，关闭 Bot');
+        if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
+        if (bot) {
+            try { bot.quit(); } catch (e) {}
+            bot = null;
+        }
+        currentStatus.connected = false;
+        io.emit('status', currentStatus);
+        io.emit('bot_disconnected');
+        addEvent('info', 'Web 客户端断开，Bot 已关闭');
+    });
 });
 
 // ═══════════════════════════════════
@@ -499,7 +520,7 @@ function handleAction(action) {
             bot.swingArm('left');
             const atkEntity = bot.entityAtCursor();
             if (atkEntity) {
-                bot.attack(atkEntity).catch(err => log('warn', `攻击失败: ${err.message}`));
+                Promise.resolve(bot.attack(atkEntity)).catch(err => log('warn', `攻击失败: ${err.message}`));
             }
             break;
         case 'attack_hold':
@@ -511,7 +532,7 @@ function handleAction(action) {
             bot.swingArm('left');
             const holdEntity = bot.entityAtCursor();
             if (holdEntity) {
-                bot.attack(holdEntity).catch(err => log('warn', `攻击失败: ${err.message}`));
+                Promise.resolve(bot.attack(holdEntity)).catch(err => log('warn', `攻击失败: ${err.message}`));
             }
             break;
         case 'dig':
@@ -520,7 +541,7 @@ function handleAction(action) {
             if (digBlock) {
                 const creative = bot.game && bot.game.gameMode === 'creative';
                 if (creative || bot.canDigBlock(digBlock)) {
-                    bot.dig(digBlock, false).catch(err => log('warn', `挖掘失败: ${err.message}`));
+                    Promise.resolve(bot.dig(digBlock, false)).catch(err => log('warn', `挖掘失败: ${err.message}`));
                 }
             }
             break;
@@ -535,7 +556,7 @@ function handleAction(action) {
             if (holdDig) {
                 const creative2 = bot.game && bot.game.gameMode === 'creative';
                 if (creative2 || bot.canDigBlock(holdDig)) {
-                    bot.dig(holdDig, true).catch(err => log('warn', `挖掘失败: ${err.message}`));
+                    Promise.resolve(bot.dig(holdDig, true)).catch(err => log('warn', `挖掘失败: ${err.message}`));
                 }
             }
             break;
@@ -558,11 +579,11 @@ function handleAction(action) {
         case 'interact':
             const interEntity = bot.entityAtCursor();
             if (interEntity) {
-                bot.useOn(interEntity).catch(err => log('warn', `交互失败: ${err.message}`));
+                Promise.resolve(bot.useOn(interEntity)).catch(err => log('warn', `交互失败: ${err.message}`));
             } else {
                 const interBlock = bot.blockAtCursor();
                 if (interBlock) {
-                    bot.activateBlock(interBlock).catch(err => log('warn', `交互失败: ${err.message}`));
+                    Promise.resolve(bot.activateBlock(interBlock)).catch(err => log('warn', `交互失败: ${err.message}`));
                 }
             }
             break;
@@ -582,7 +603,7 @@ function handleAction(action) {
             const held = bot.heldItem;
             if (held) {
                 bot.swingArm('right');
-                bot.tossStack(held).catch(err => log('warn', `丢出失败: ${err.message}`));
+                Promise.resolve(bot.tossStack(held)).catch(err => log('warn', `丢出失败: ${err.message}`));
             }
             break;
         case 'drop_all':
@@ -724,7 +745,7 @@ function processChatCommand(rawContent) {
 
     if (!chatMsg) chatMsg = plain;
 
-    if (chatMsg && chatMsg.startsWith(CMD_PREFIX)) {
+    if (chatMsg && chatMsg.startsWith(CMD_PREFIX) && playerName) {
         const commandLine = chatMsg.substring(CMD_PREFIX.length).trim();
         if (commandLine) {
             log('info', `[命令] ${playerName}: ${commandLine}`);
@@ -737,6 +758,35 @@ function executeCommand(line, playerName) {
     const parts = line.split(/\s+/);
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1);
+
+    function reply(msg) {
+        const MAX_LEN = 200;
+        if (msg.includes(' | ')) {
+            const items = msg.split(' | ');
+            let current = '';
+            for (const item of items) {
+                if (current && (current.length + item.length + 3) > MAX_LEN) {
+                    sendChunk(current);
+                    current = item;
+                } else {
+                    current = current ? current + ' | ' + item : item;
+                }
+            }
+            if (current) sendChunk(current);
+        } else {
+            for (let i = 0; i < msg.length; i += MAX_LEN) {
+                sendChunk(msg.substring(i, i + MAX_LEN));
+            }
+        }
+
+        function sendChunk(chunk) {
+            if (playerName) {
+                bot.chat(`/msg ${playerName} ${chunk}`);
+            } else {
+                bot.chat(chunk);
+            }
+        }
+    }
 
     switch (cmd) {
         case 'help':
@@ -769,8 +819,9 @@ function executeCommand(line, playerName) {
                 '**unequip <槽位> - 卸下',
                 '**movetohotbar - 背包物品移入快捷栏',
                 '**ping - 延迟测试',
+                '**restart - 进程级重启',
             ];
-            bot.chat(helpList.join(' | '));
+            reply(helpList.join(' | '));
             break;
         case 'send':
             if (args.length > 0) bot.chat(args.join(' '));
@@ -778,22 +829,30 @@ function executeCommand(line, playerName) {
         case 'cmd':
             if (args.length > 0) bot.chat('/' + args.join(' '));
             break;
+        case 'restart':
+            reply('正在进程级重启...');
+            doProcessRestart();
+            break;
         case 'respawn':
             bot._client.write('client_command', { actionId: 0 });
+            reply('已发送重生请求');
             break;
         case 'move':
             if (args.length > 0) {
                 const dir = args[0];
                 const dur = args.length > 1 ? parseInt(args[1]) : 1000;
                 startMove(dir, dur);
+                reply(`移动: ${dir} ${dur}ms`);
             }
             break;
         case 'jump':
             if (bot.vehicle) bot.jump();
             else { bot.setControlState('jump', true); setTimeout(() => bot.setControlState('jump', false), 200); }
+            reply('跳跃');
             break;
         case 'stop':
             stopMove();
+            reply('已停止');
             break;
         case 'goto':
             if (args.length >= 3) {
@@ -801,57 +860,69 @@ function executeCommand(line, playerName) {
                 stopMove();
                 bot.pathfinder.setMovements(movements);
                 bot.pathfinder.goto(new GoalBlock(parseInt(args[0]), parseInt(args[1]), parseInt(args[2])))
-                    .then(() => log('info', '到达目标'))
-                    .catch(err => log('warn', `寻路失败: ${err.message}`));
+                    .then(() => { log('info', '到达目标'); reply('到达目标'); })
+                    .catch(err => { log('warn', `寻路失败: ${err.message}`); reply(`寻路失败: ${err.message}`); });
             }
             break;
         case 'follow':
             if (args.length > 0) {
                 if (!movements) break;
                 const target = bot.players[args[0]];
-                if (!target || !target.entity) { log('warn', `找不到玩家: ${args[0]}`); break; }
+                if (!target || !target.entity) { reply(`找不到玩家: ${args[0]}`); break; }
                 stopMove();
                 bot.pathfinder.setMovements(movements);
-                bot.pathfinder.goto(new GoalFollow(target.entity, args.length > 1 ? parseFloat(args[1]) : 2));
+                bot.pathfinder.goto(new GoalFollow(target.entity, args.length > 1 ? parseFloat(args[1]) : 2))
+                    .then(() => { log('info', '到达目标附近'); reply('到达目标附近'); })
+                    .catch(err => { log('warn', `跟随失败: ${err.message}`); reply(`跟随失败: ${err.message}`); });
             }
             break;
         case 'attack':
             handleAction(args.length > 0 ? 'attack_hold' : 'attack');
             if (args.length > 0) setTimeout(() => { if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; } }, parseInt(args[0]));
+            reply('攻击');
             break;
         case 'dig':
             handleAction(args.length > 0 ? 'dig_hold' : 'dig');
             if (args.length > 0) setTimeout(() => { if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; } }, parseInt(args[0]));
+            reply('挖掘');
             break;
         case 'place':
             handleAction('place');
+            reply('放置方块');
             break;
         case 'interact':
             handleAction('interact');
+            reply('交互');
             break;
         case 'use':
             handleAction('use_item');
+            reply('使用物品');
             break;
         case 'usehold':
             handleAction('use_item_hold');
             if (args.length > 0) setTimeout(() => { if (isRightClickHolding) { bot.deactivateItem(); isRightClickHolding = false; } }, parseInt(args[0]));
+            reply(args.length > 0 ? `长按使用 ${args[0]}ms` : '长按使用');
             break;
         case 'sneak':
             bot.setControlState('sneak', !bot.getControlState('sneak'));
+            reply(bot.getControlState('sneak') ? '已潜行' : '已取消潜行');
             break;
         case 'sprint':
             bot.setControlState('sprint', !bot.getControlState('sprint'));
+            reply(bot.getControlState('sprint') ? '已疾跑' : '已取消疾跑');
             break;
         case 'drop':
             handleAction('drop');
+            reply('丢出物品');
             break;
         case 'dropall':
             handleAction('drop_all');
+            reply('丢出全部');
             break;
         case 'slot':
             if (args.length > 0) {
                 const s = parseInt(args[0]) - 1;
-                if (s >= 0 && s <= 8) bot.setQuickBarSlot(s);
+                if (s >= 0 && s <= 8) { bot.setQuickBarSlot(s); reply(`切换到第 ${args[0]} 格`); }
             }
             break;
         case 'look':
@@ -859,8 +930,10 @@ function executeCommand(line, playerName) {
                 const y = parseFloat(args[0]) * Math.PI / 180;
                 const p = parseFloat(args[1]) * Math.PI / 180;
                 bot.look(y, p, true);
+                reply(`视角: yaw=${args[0]} pitch=${args[1]}`);
             } else if (args.length === 1) {
                 bot.look(parseFloat(args[0]) * Math.PI / 180, 0, true);
+                reply(`视角: yaw=${args[0]}`);
             }
             break;
         case 'rotate':
@@ -873,38 +946,44 @@ function executeCommand(line, playerName) {
                 if (np > mp) np = mp;
                 if (np < -mp) np = -mp;
                 bot.look(ny, np, true);
+                reply(`旋转: yaw${args[0] >= 0 ? '+' : ''}${args[0]}° pitch${args.length >= 2 ? (args[1] >= 0 ? '+' : '') + args[1] : '+0'}°`);
             }
             break;
         case 'cancel':
             handleAction('cancel');
+            reply('已取消');
             break;
         case 'dismount':
             handleAction('dismount');
+            reply('下马');
             break;
         case 'equip':
             if (args.length >= 1) {
                 equipItem(args[0], args.length >= 2 ? args[1] : 'hand');
+                reply(`装备 ${args[0]}`);
             }
             break;
         case 'unequip':
             if (args.length >= 1) {
                 unequipItem(args[0]);
+                reply(`卸下 ${args[0]}`);
             }
             break;
         case 'movetohotbar':
             moveToHotbar();
+            reply('背包物品移入快捷栏');
             break;
         case 'ping':
             const start = Date.now();
             bot.chat('/ping');
             bot.once('message', () => {
                 const ping = Date.now() - start;
-                bot.chat(`Pong! ${ping}ms`);
+                reply(`Pong! ${ping}ms`);
             });
             break;
         default:
             log('info', `未知命令: ${cmd}`);
-            bot.chat(`未知命令: ${cmd}，输入 **help 查看可用命令`);
+            reply(`未知命令: ${cmd}，输入 **help 查看可用命令`);
     }
 }
 
@@ -918,4 +997,6 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('  mcbot 网页控制面板 (纯 Node.js)');
     console.log(`  打开浏览器访问: http://localhost:${PORT}`);
     console.log('='.repeat(50));
+    console.log('自动连接 Bot...');
+    createBot();
 });
