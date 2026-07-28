@@ -796,6 +796,48 @@ rl.on('line', (line) => {
                 })();
                 break;
 
+            // ── 取消装备 ──
+            case 'unequip':
+                (async () => {
+                    const dest = data.destination || 'hand';
+                    try {
+                        await bot.unequip(dest);
+                        logInfo(`[Unequip] 已取消装备: ${dest}`);
+                    } catch (err) {
+                        logInfo(`[Unequip] 失败: ${err.message}`);
+                    }
+                })();
+                break;
+
+            // ── 背包物品移动到快捷栏 ──
+            case 'move_to_hotbar':
+                (async () => {
+                    const inventoryItems = bot.inventory.items();
+                    const hotbarSlots = [36, 37, 38, 39, 40, 41, 42, 43, 44];
+                    const emptyHotbarSlots = hotbarSlots.filter(s => !bot.inventory.slots[s]);
+                    if (emptyHotbarSlots.length === 0) {
+                        logInfo('[MoveToHotbar] 快捷栏已满');
+                        return;
+                    }
+                    const itemsNotInHotbar = inventoryItems.filter(i => i.slot < 36 || i.slot > 44);
+                    if (itemsNotInHotbar.length === 0) {
+                        logInfo('[MoveToHotbar] 背包无物品可移动');
+                        return;
+                    }
+                    logInfo(`[MoveToHotbar] 将 ${itemsNotInHotbar.length} 件物品移动到 ${emptyHotbarSlots.length} 个空快捷栏位...`);
+                    let movedCount = 0;
+                    for (let i = 0; i < Math.min(emptyHotbarSlots.length, itemsNotInHotbar.length); i++) {
+                        try {
+                            await bot.moveSlot(itemsNotInHotbar[i].slot, emptyHotbarSlots[i]);
+                            movedCount++;
+                        } catch (err) {
+                            logInfo(`[MoveToHotbar] 移动失败: ${err.message}`);
+                        }
+                    }
+                    logInfo(`[MoveToHotbar] 完成，已移动 ${movedCount} 件物品`);
+                })();
+                break;
+
             // ── 下马 ──
             case 'dismount':
                 // 离开载具（通过发送潜行键模拟，Minecraft 原版下马方式）
@@ -832,7 +874,23 @@ rl.on('line', (line) => {
                         heldItem: bot.heldItem ? { name: bot.heldItem.name, count: bot.heldItem.count } : null,
                         isSneaking: bot.getControlState('sneak'),
                         isSprinting: bot.getControlState('sprint'),
+                        isCrawling: bot.entity.pose === 'swimming' && bot.entity.position.y === Math.floor(bot.entity.position.y) + 0.0,
+                        isRiding: !!bot.entity.vehicle,
                     });
+                })();
+                break;
+
+            // ── 旋转视角 ──
+            case 'rotate':
+                (() => {
+                    const dyaw = data.dyaw || 0;
+                    const dpitch = data.dpitch || 0;
+                    const newYaw = bot.entity.yaw + dyaw;
+                    let newPitch = bot.entity.pitch + dpitch;
+                    const maxPitch = Math.PI / 2 - 0.01;
+                    if (newPitch > maxPitch) newPitch = maxPitch;
+                    if (newPitch < -maxPitch) newPitch = -maxPitch;
+                    bot.look(newYaw, newPitch, true);
                 })();
                 break;
 

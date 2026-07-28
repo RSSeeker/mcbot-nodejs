@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mcbot 控制面板</title>
+    <style>
+        :root {
+            --bg: #000000;
+            --panel-bg: #0a0a0a;
+            --card-bg: #141414;
+            --accent: #e94560;
+            --accent2: #00d2ff;
+            --text: #e0e0e0;
+            --text-dim: #666666;
+            --border: #1a1a1a;
+            --danger: #ff4757;
+            --success: #2ed573;
+            --warning: #ffa502;
+            --health: #ff4757;
+            --food: #ffa502;
+            --radius: 10px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .header {
+            background: var(--panel-bg);
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .header h1 {
+            font-size: 16px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .connection-area {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 5px 12px;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.2s;
+            color: #fff;
+            background: var(--card-bg);
+        }
+        .btn:hover { border-color: #555; filter: brightness(1.3); }
+        .btn:active { transform: scale(0.97); }
+        .btn-connect { background: var(--success); border-color: var(--success); color: #000; }
+        .btn-disconnect { background: var(--danger); border-color: var(--danger); }
+        .btn-accent { background: var(--accent); border-color: var(--accent); }
+        .btn-accent2 { background: var(--accent2); border-color: var(--accent2); color: #000; }
+        .status-dot {
+            width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+            margin-right: 6px;
+        }
+        .status-dot.online { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .status-dot.offline { background: var(--danger); }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 280px 1fr 280px;
+            gap: 6px;
+            padding: 6px;
+            height: calc(100vh - 62px);
+        }
+        @media (max-width: 1200px) {
+            .main-layout { grid-template-columns: 1fr; height: auto; }
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            border-radius: 8px;
+            padding: 8px;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .panel-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent2);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 4px;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+        }
+        .stat-item {
+            background: var(--card-bg);
+            border-radius: 6px;
+            padding: 5px;
+            text-align: center;
+        }
+        .stat-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-value {
+            font-size: 14px;
+            font-weight: 700;
+            margin-top: 1px;
+        }
+        .stat-value.health { color: var(--health); }
+        .stat-value.food { color: var(--food); }
+        .stat-value.coord { color: var(--accent2); font-size: 12px; }
+
+        .bar-container {
+            background: #000;
+            border-radius: 4px;
+            height: 6px;
+            margin-top: 4px;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        .bar-fill.health { background: var(--health); }
+        .bar-fill.food { background: var(--food); }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: 44px 44px 44px;
+            grid-template-rows: 44px 44px 44px;
+            gap: 3px;
+            justify-content: center;
+            align-items: center;
+        }
+        .dpad-btn {
+            width: 44px; height: 44px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .dpad-btn:hover { border-color: #555; }
+        .dpad-btn:active, .dpad-btn.active {
+            background: var(--accent2);
+            color: #000;
+            border-color: var(--accent2);
+            transform: scale(0.93);
+        }
+        .dpad-btn.w { grid-column: 2; grid-row: 1; }
+        .dpad-btn.a { grid-column: 1; grid-row: 2; }
+        .dpad-btn.s { grid-column: 2; grid-row: 2; }
+        .dpad-btn.d { grid-column: 3; grid-row: 2; }
+        .dpad-center { grid-column: 2; grid-row: 2; display: flex; gap: 3px; justify-content: center; }
+        .dpad-center .dpad-btn { width: 20px; height: 20px; font-size: 10px; }
+
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 3px;
+        }
+        .action-btn {
+            padding: 5px 2px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            color: var(--text);
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 600;
+            transition: all 0.15s;
+            text-align: center;
+        }
+        .action-btn:hover { border-color: #555; filter: brightness(1.3); }
+        .action-btn:active { background: var(--accent2); color: #000; }
+        .action-btn.danger { color: var(--danger); }
+        .action-btn.danger:hover { background: var(--danger); color: #fff; }
+
+        .chat-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            background: #000;
+            border-radius: 6px;
+            padding: 6px;
+            font-size: 12px;
+            max-height: 200px;
+            min-height: 100px;
+        }
+        .chat-msg {
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            word-break: break-all;
+        }
+        .chat-msg .sender {
+            color: var(--accent2);
+            font-weight: 600;
+            margin-right: 4px;
+        }
+        .chat-msg .time {
+            color: var(--text-dim);
+            font-size: 9px;
+            margin-left: 4px;
+        }
+        .chat-input-area {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+        }
+        .chat-input-area input {
+            flex: 1;
+            background: #000;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 6px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+        .chat-input-area input::placeholder { color: var(--text-dim); }
+
+        .row-group {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+        .row-group input {
+            flex: 1;
+            background: #000;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 4px 6px;
+            border-radius: 5px;
+            font-size: 11px;
+        }
+        .row-group input::placeholder { color: var(--text-dim); }
+        .row-group label { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+        .row-group select {
+            background: #000;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 4px;
+            border-radius: 5px;
+            font-size: 11px;
+        }
+
+        .log-panel {
+            overflow-y: auto;
+            max-height: 120px;
+            font-size: 10px;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        .log-entry {
+            padding: 1px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.02);
+        }
+        .log-entry .log-time { color: var(--text-dim); margin-right: 4px; }
+        .log-entry.success { color: var(--success); }
+        .log-entry.error { color: var(--danger); }
+        .log-entry.warning { color: var(--warning); }
+        .log-entry.info { color: var(--text-dim); }
+
+        .slot-bar {
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .slot-btn {
+            width: 28px; height: 28px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            color: var(--text);
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .slot-btn:hover { border-color: #555; }
+        .slot-btn:active { background: var(--accent2); color: #000; }
+
+        .toggle-group {
+            display: flex;
+            gap: 4px;
+        }
+        .toggle-btn {
+            flex: 1;
+            padding: 5px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 600;
+            transition: all 0.15s;
+            text-align: center;
+        }
+        .toggle-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .status-badge {
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-size: 9px;
+            font-weight: 600;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: #000; }
+        ::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎮 mcbot 控制面板</h1>
+        <div class="connection-area">
+            <span id="statusIndicator">
+                <span class="status-dot offline"></span>
+                <span id="statusText">未连接</span>
+            </span>
+            <button class="btn btn-connect" id="btnConnect" onclick="connectBot()">连接 Bot</button>
+            <button class="btn btn-disconnect" id="btnDisconnect" onclick="disconnectBot()" style="display:none;">断开</button>
+            <button class="btn btn-accent2" id="btnRestart" onclick="restartBot()" style="display:none;">🔄 重启</button>
+        </div>
+    </div>
+
+    <!-- 配置面板（连接前显示） -->
+    <div id="configPanel" style="background:var(--panel-bg);border-bottom:1px solid var(--border);padding:6px 16px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+        <span style="font-weight:700;color:var(--accent2);margin-right:4px;font-size:12px;">⚙️ 连接配置</span>
+        <label style="font-size:10px;color:var(--text-dim);">服务器:</label>
+        <input type="text" id="cfgHost" placeholder="服务器地址" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:120px;">
+        <label style="font-size:10px;color:var(--text-dim);">端口:</label>
+        <input type="number" id="cfgPort" placeholder="25565" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:60px;">
+        <label style="font-size:10px;color:var(--text-dim);">版本:</label>
+        <input type="text" id="cfgVersion" placeholder="1.21.4" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:60px;">
+        <label style="font-size:10px;color:var(--text-dim);">用户名:</label>
+        <input type="text" id="cfgUsername" placeholder="Bot名" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:90px;">
+        <label style="font-size:10px;color:var(--text-dim);">密码:</label>
+        <input type="text" id="cfgPassword" placeholder="密码" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:70px;">
+        <label style="font-size:10px;color:var(--text-dim);">命令前缀:</label>
+        <input type="text" id="cfgPrefix" placeholder="**" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:45px;">
+    </div>
+
+    <div class="main-layout">
+        <!-- 左侧面板: 状态 + 移动 + 物品 + 装备 -->
+        <div class="panel">
+            <div class="panel-title">📊 Bot 状态</div>
+            <div class="stat-grid">
+                <div class="stat-item">
+                    <div class="stat-label">❤️ 生命值</div>
+                    <div class="stat-value health" id="healthVal">--</div>
+                    <div class="bar-container"><div class="bar-fill health" id="healthBar" style="width:0%"></div></div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">🍗 饥饿值</div>
+                    <div class="stat-value food" id="foodVal">--</div>
+                    <div class="bar-container"><div class="bar-fill food" id="foodBar" style="width:0%"></div></div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">🎯 模式</div>
+                    <div class="stat-value" id="gamemodeVal" style="color:#a29bfe;">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">🌍 维度</div>
+                    <div class="stat-value" id="dimensionVal" style="color:#00d2ff;">--</div>
+                </div>
+                <div class="stat-item" style="grid-column: span 2;">
+                    <div class="stat-label">📍 坐标</div>
+                    <div class="stat-value coord" id="posVal">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">🗡️ 手持</div>
+                    <div class="stat-value" id="heldVal" style="font-size:12px;color:#ffd700;">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">👁️ 视角</div>
+                    <div class="stat-value" id="lookVal" style="font-size:12px;color:#00d2ff;">--</div>
+                </div>
+            </div>
+
+            <!-- 状态标识 -->
+            <div class="status-badges" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
+                <span id="badgeSneak" class="status-badge" style="display:none;">👣 潜行</span>
+                <span id="badgeSprint" class="status-badge" style="display:none;">⚡ 疾跑</span>
+                <span id="badgeCrawl" class="status-badge" style="display:none;">🕳️ 爬行</span>
+                <span id="badgeRide" class="status-badge" style="display:none;">🐴 骑乘</span>
+            </div>
+
+            <div class="panel-title">🎯 移动控制</div>
+            <div class="dpad">
+                <div></div>
+                <button class="dpad-btn w" id="btnW"
+                    onmousedown="startMove('forward')" onmouseup="stopMove()"
+                    onmouseleave="stopMove()" ontouchstart="startMove('forward')" ontouchend="stopMove()">▲</button>
+                <div></div>
+                <button class="dpad-btn a" id="btnA"
+                    onmousedown="startMove('left')" onmouseup="stopMove()"
+                    onmouseleave="stopMove()" ontouchstart="startMove('left')" ontouchend="stopMove()">◀</button>
+                <div class="dpad-center">
+                    <button class="dpad-btn" id="btnJump" onclick="doJump()" style="font-size:16px;">↑</button>
+                </div>
+                <button class="dpad-btn d" id="btnD"
+                    onmousedown="startMove('right')" onmouseup="stopMove()"
+                    onmouseleave="stopMove()" ontouchstart="startMove('right')" ontouchend="stopMove()">▶</button>
+                <div></div>
+                <button class="dpad-btn s" id="btnS"
+                    onmousedown="startMove('back')" onmouseup="stopMove()"
+                    onmouseleave="stopMove()" ontouchstart="startMove('back')" ontouchend="stopMove()">▼</button>
+                <div></div>
+            </div>
+            <div class="toggle-group">
+                <button class="toggle-btn" id="btnSneakTgl" onclick="toggleSneak()">👣 潜行</button>
+                <button class="toggle-btn" id="btnSprint" onclick="toggleSprint()">⚡ 疾跑</button>
+                <button class="toggle-btn" id="btnStopAll" onclick="doStop()">⏹ 停止</button>
+            </div>
+
+            <!-- 视角转动 -->
+            <div class="panel-title">👁️ 视角转动</div>
+            <div class="dpad">
+                <div></div>
+                <button class="dpad-btn" id="btnLookUp"
+                    onmousedown="startRotate(0, 5)" onmouseup="stopRotate()"
+                    onmouseleave="stopRotate()" ontouchstart="startRotate(0, 5)" ontouchend="stopRotate()">▲</button>
+                <div></div>
+                <button class="dpad-btn" id="btnLookLeft"
+                    onmousedown="startRotate(5, 0)" onmouseup="stopRotate()"
+                    onmouseleave="stopRotate()" ontouchstart="startRotate(5, 0)" ontouchend="stopRotate()">◀</button>
+                <div style="display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-dim);">视角</div>
+                <button class="dpad-btn" id="btnLookRight"
+                    onmousedown="startRotate(-5, 0)" onmouseup="stopRotate()"
+                    onmouseleave="stopRotate()" ontouchstart="startRotate(-5, 0)" ontouchend="stopRotate()">▶</button>
+                <div></div>
+                <button class="dpad-btn" id="btnLookDown"
+                    onmousedown="startRotate(0, -5)" onmouseup="stopRotate()"
+                    onmouseleave="stopRotate()" ontouchstart="startRotate(0, -5)" ontouchend="stopRotate()">▼</button>
+                <div></div>
+            </div>
+
+            <div class="panel-title">🎒 物品栏</div>
+            <div class="slot-bar" id="slotBar"></div>
+            <button class="btn btn-accent" onclick="moveToHotbar()" style="margin-top:4px;width:100%;font-size:11px;">📦 背包物品 → 快捷栏</button>
+
+            <div class="panel-title">🛡️ 装备控制</div>
+            <div class="row-group" style="flex-wrap:wrap;">
+                <input type="text" id="equipItem" placeholder="物品名(如 diamond_sword)" style="flex:1;min-width:100px;">
+                <select id="equipDest">
+                    <option value="hand">主手</option>
+                    <option value="off-hand">副手</option>
+                    <option value="head">头盔</option>
+                    <option value="torso">胸甲</option>
+                    <option value="legs">护腿</option>
+                    <option value="feet">靴子</option>
+                </select>
+                <button class="btn btn-accent2" onclick="doEquip()" style="padding:4px 8px;font-size:10px;">装备</button>
+                <button class="btn" onclick="doUnequip()" style="padding:4px 8px;font-size:10px;color:var(--danger);">卸下</button>
+            </div>
+        </div>
+
+        <!-- 中间面板: 动作 + 聊天 -->
+        <div class="panel" style="flex:1;">
+            <div class="panel-title">⚔️ 动作</div>
+            <div class="action-grid">
+                <button class="action-btn" onclick="doAction('attack')">⚔️ 攻击</button>
+                <button class="action-btn" onclick="doAction('attack_hold')">⚔️ 连击</button>
+                <button class="action-btn" onclick="doAction('dig')">⛏ 挖掘</button>
+                <button class="action-btn" onclick="doAction('dig_hold')">⛏ 持续挖</button>
+                <button class="action-btn" onclick="doAction('place')">🧱 放置</button>
+                <button class="action-btn" onclick="doAction('interact')">🤝 交互</button>
+                <button class="action-btn" onclick="doAction('use_item')">🍎 使用</button>
+                <button class="action-btn" onclick="doAction('use_item_hold')">🍎 长按</button>
+                <button class="action-btn" onclick="doActivate()">🎯 开始使用</button>
+                <button class="action-btn" onclick="doDeactivate()">🛑 停止使用</button>
+                <button class="action-btn" onclick="doAction('drop')">🗑 丢弃</button>
+                <button class="action-btn" onclick="doAction('drop_all')">🗑 全丢</button>
+                <button class="action-btn" onclick="doAction('dismount')">🐴 下马</button>
+                <button class="action-btn danger" onclick="doAction('cancel')">✖ 取消</button>
+                <button class="action-btn" onclick="doAction('respawn')" style="grid-column: span 3;">🔄 重生</button>
+            </div>
+
+            <div class="panel-title">💬 聊天</div>
+            <div class="chat-panel">
+                <div class="chat-messages" id="chatMessages">
+                    <div style="color:var(--text-dim);text-align:center;padding:20px;">等待聊天消息...</div>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="chatInput" placeholder="输入聊天消息..." onkeydown="if(event.key==='Enter')sendChat()">
+                    <button class="btn btn-accent2" onclick="sendChat()" style="padding:4px 10px;font-size:11px;">发送</button>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="cmdInput" placeholder="/ 输入Minecraft命令..." onkeydown="if(event.key==='Enter')sendCmd()">
+                    <button class="btn btn-accent" onclick="sendCmd()" style="padding:4px 10px;font-size:11px;">执行</button>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="whisperPlayer" placeholder="玩家名" style="width:80px;flex:none;">
+                    <input type="text" id="whisperMsg" placeholder="私聊消息...">
+                    <button class="btn" onclick="sendWhisper()" style="padding:4px 8px;font-size:10px;color:var(--accent2);">私聊</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧面板: 视角 + 寻路 + 跟随 + 日志 -->
+        <div class="panel">
+            <div class="panel-title">👁️ 视角控制</div>
+            <div class="row-group">
+                <label>Yaw:</label>
+                <input type="number" id="yawInput" value="0" step="1" min="-180" max="180" style="width:50px;flex:none;">
+                <label>Pitch:</label>
+                <input type="number" id="pitchInput" value="0" step="1" min="-90" max="90" style="width:50px;flex:none;">
+                <button class="btn btn-accent2" onclick="doLook()" style="padding:4px 8px;font-size:10px;">看向</button>
+            </div>
+            <div class="row-group" style="margin-top:4px;">
+                <input type="text" id="lookAtPlayer" placeholder="看向玩家名" style="flex:1;">
+                <button class="btn btn-accent2" onclick="doLookAt()" style="padding:4px 8px;font-size:10px;">看向玩家</button>
+            </div>
+            <div class="row-group">
+                <label>X:</label><input type="number" id="lookAtX" value="0" step="1" style="width:45px;flex:none;">
+                <label>Y:</label><input type="number" id="lookAtY" value="0" step="1" style="width:45px;flex:none;">
+                <label>Z:</label><input type="number" id="lookAtZ" value="0" step="1" style="width:45px;flex:none;">
+                <button class="btn" onclick="doLookAtCoord()" style="padding:4px 8px;font-size:10px;">看向坐标</button>
+            </div>
+
+            <div class="panel-title">🗺️ 寻路</div>
+            <div class="row-group">
+                <label>X:</label><input type="number" id="gotoX" value="0" step="1">
+                <label>Y:</label><input type="number" id="gotoY" value="64" step="1">
+                <label>Z:</label><input type="number" id="gotoZ" value="0" step="1">
+                <button class="btn btn-accent" onclick="doGoto()" style="padding:4px 8px;font-size:10px;">Go</button>
+            </div>
+
+            <div class="panel-title">👤 跟随</div>
+            <div class="row-group">
+                <input type="text" id="followPlayer" placeholder="玩家名" style="flex:1;">
+                <button class="btn btn-accent2" onclick="doFollow()" style="padding:4px 8px;font-size:10px;">跟随</button>
+            </div>
+
+            <div class="panel-title">📋 事件日志</div>
+            <div class="log-panel" id="logPanel">
+                <div class="log-entry info">等待连接...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+        let connected = false;
+        let sneakActive = false;
+        let sprintActive = false;
+        let moveTimer = null;
+        let rotateTimer = null;
+
+        const slotBar = document.getElementById('slotBar');
+        for (let i = 1; i <= 9; i++) {
+            const btn = document.createElement('button');
+            btn.className = 'slot-btn';
+            btn.textContent = i;
+            btn.onclick = () => switchSlot(i);
+            slotBar.appendChild(btn);
+        }
+
+        socket.on('status', (data) => updateStatus(data));
+        socket.on('chat_msg', (data) => addChatMsg(data.sender, data.message));
+        socket.on('chat_history', (msgs) => msgs.forEach(m => addChatMsg(m.sender, m.message)));
+        socket.on('log', (data) => addLog(data.level, data.msg));
+
+        socket.on('bot_connected', (data) => {
+            connected = true;
+            updateConnectionUI(true);
+            addLog('success', `Bot ${data.username} 已连接到 ${data.host}:${data.port}`);
+        });
+
+        socket.on('bot_disconnected', () => {
+            connected = false;
+            updateConnectionUI(false);
+            addLog('info', 'Bot 已断开');
+        });
+
+        socket.on('bot_error', (data) => addLog('error', data.msg));
+        socket.on('bot_event', (data) => addLog('info', `[${data.type}] ${JSON.stringify(data.data)}`));
+
+        function updateConnectionUI(isConnected) {
+            document.getElementById('btnConnect').style.display = isConnected ? 'none' : '';
+            document.getElementById('btnDisconnect').style.display = isConnected ? '' : 'none';
+            document.getElementById('btnRestart').style.display = isConnected ? '' : 'none';
+            document.getElementById('configPanel').style.display = isConnected ? 'none' : '';
+            const dot = document.querySelector('#statusIndicator .status-dot');
+            dot.className = 'status-dot ' + (isConnected ? 'online' : 'offline');
+            document.getElementById('statusText').textContent = isConnected ? '已连接' : '未连接';
+        }
+
+        function updateStatus(data) {
+            document.getElementById('healthVal').textContent = data.health || '--';
+            document.getElementById('foodVal').textContent = data.food || '--';
+            document.getElementById('gamemodeVal').textContent = data.gamemode || '--';
+            document.getElementById('dimensionVal').textContent = data.dimension || '--';
+            document.getElementById('heldVal').textContent = data.heldItem || '--';
+            document.getElementById('healthBar').style.width = Math.min(100, (data.health || 0) * 5) + '%';
+            document.getElementById('foodBar').style.width = Math.min(100, (data.food || 0) * 5) + '%';
+            if (data.position) {
+                document.getElementById('posVal').textContent =
+                    `${data.position.x}, ${data.position.y}, ${data.position.z}`;
+            }
+            document.getElementById('lookVal').textContent =
+                `Y:${data.yaw || 0}° P:${data.pitch || 0}°`;
+            if (data.isSneaking !== undefined) {
+                sneakActive = data.isSneaking;
+                document.getElementById('btnSneakTgl').classList.toggle('active', sneakActive);
+            }
+            if (data.isSprinting !== undefined) {
+                sprintActive = data.isSprinting;
+                document.getElementById('btnSprint').classList.toggle('active', sprintActive);
+            }
+            const badgeSneak = document.getElementById('badgeSneak');
+            const badgeSprint = document.getElementById('badgeSprint');
+            const badgeCrawl = document.getElementById('badgeCrawl');
+            const badgeRide = document.getElementById('badgeRide');
+            badgeSneak.style.display = data.isSneaking ? '' : 'none';
+            badgeSprint.style.display = data.isSprinting ? '' : 'none';
+            badgeCrawl.style.display = data.isCrawling ? '' : 'none';
+            badgeRide.style.display = data.isRiding ? '' : 'none';
+            if (data.isSneaking) badgeSneak.style.background = '#e94560'; else badgeSneak.style.background = '';
+            if (data.isSprinting) badgeSprint.style.background = '#ffa502'; else badgeSprint.style.background = '';
+            if (data.isCrawling) badgeCrawl.style.background = '#2ed573'; else badgeCrawl.style.background = '';
+            if (data.isRiding) badgeRide.style.background = '#00d2ff'; else badgeRide.style.background = '';
+        }
+
+        function addChatMsg(sender, message) {
+            const container = document.getElementById('chatMessages');
+            if (container.querySelector('div[style]')) container.innerHTML = '';
+            const div = document.createElement('div');
+            div.className = 'chat-msg';
+            const now = new Date();
+            const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+            div.innerHTML = `<span class="sender">${escHtml(sender)}:</span>${escHtml(message)}<span class="time">${time}</span>`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function addLog(level, msg) {
+            const container = document.getElementById('logPanel');
+            if (container.querySelector('div[style]')) container.innerHTML = '';
+            const div = document.createElement('div');
+            div.className = `log-entry ${level}`;
+            const now = new Date();
+            const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+            div.innerHTML = `<span class="log-time">${time}</span>${escHtml(msg)}`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            if (container.children.length > 100) container.removeChild(container.firstChild);
+        }
+
+        function escHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        function connectBot() {
+            const configData = {
+                host: document.getElementById('cfgHost').value.trim() || undefined,
+                port: document.getElementById('cfgPort').value.trim() || undefined,
+                version: document.getElementById('cfgVersion').value.trim() || undefined,
+                username: document.getElementById('cfgUsername').value.trim() || undefined,
+                password: document.getElementById('cfgPassword').value.trim() || undefined,
+                command_prefix: document.getElementById('cfgPrefix').value.trim() || undefined,
+            };
+            Object.keys(configData).forEach(k => { if (!configData[k]) delete configData[k]; });
+            socket.emit('connect_bot', configData);
+            addLog('info', '正在连接 Bot...');
+        }
+
+        function disconnectBot() {
+            socket.emit('disconnect_bot');
+        }
+
+        function restartBot() {
+            if (!connected) return;
+            addLog('info', '正在重启 Bot...');
+            socket.emit('restart_bot');
+        }
+
+        function sendChat() {
+            const input = document.getElementById('chatInput');
+            const msg = input.value.trim();
+            if (!msg) return;
+            socket.emit('chat', { message: msg });
+            input.value = '';
+        }
+
+        function startMove(direction) {
+            if (!connected) return;
+            socket.emit('set_control', { control: direction, state: true });
+            const btnMap = { forward: 'btnW', back: 'btnS', left: 'btnA', right: 'btnD' };
+            const btn = document.getElementById(btnMap[direction]);
+            if (btn) btn.classList.add('active');
+            if (moveTimer) clearTimeout(moveTimer);
+        }
+
+        function stopMove() {
+            ['forward', 'back', 'left', 'right'].forEach(d => {
+                socket.emit('set_control', { control: d, state: false });
+            });
+            ['btnW', 'btnS', 'btnA', 'btnD'].forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) btn.classList.remove('active');
+            });
+        }
+
+        function doJump() {
+            if (!connected) return;
+            socket.emit('jump');
+        }
+
+        function startRotate(dyaw, dpitch) {
+            if (!connected) return;
+            socket.emit('rotate', { dyaw: dyaw, dpitch: dpitch });
+            if (rotateTimer) clearInterval(rotateTimer);
+            rotateTimer = setInterval(() => {
+                socket.emit('rotate', { dyaw: dyaw, dpitch: dpitch });
+            }, 100);
+            let btnId = null;
+            if (dyaw === 0 && dpitch > 0) btnId = 'btnLookUp';
+            else if (dyaw === 0 && dpitch < 0) btnId = 'btnLookDown';
+            else if (dyaw > 0 && dpitch === 0) btnId = 'btnLookLeft';
+            else if (dyaw < 0 && dpitch === 0) btnId = 'btnLookRight';
+            if (btnId) document.getElementById(btnId).classList.add('active');
+        }
+
+        function stopRotate() {
+            if (rotateTimer) { clearInterval(rotateTimer); rotateTimer = null; }
+            ['btnLookUp', 'btnLookDown', 'btnLookLeft', 'btnLookRight'].forEach(id => {
+                document.getElementById(id).classList.remove('active');
+            });
+        }
+
+        function toggleSneak() {
+            if (!connected) return;
+            sneakActive = !sneakActive;
+            socket.emit('set_control', { control: 'sneak', state: sneakActive });
+            document.getElementById('btnSneakTgl').classList.toggle('active', sneakActive);
+        }
+
+        function toggleSprint() {
+            if (!connected) return;
+            sprintActive = !sprintActive;
+            socket.emit('set_control', { control: 'sprint', state: sprintActive });
+            document.getElementById('btnSprint').classList.toggle('active', sprintActive);
+        }
+
+        function doStop() {
+            if (!connected) return;
+            socket.emit('stop');
+            stopMove();
+            if (sneakActive) { sneakActive = false; socket.emit('set_control', { control: 'sneak', state: false }); }
+            if (sprintActive) { sprintActive = false; socket.emit('set_control', { control: 'sprint', state: false }); }
+            document.getElementById('btnSneakTgl').classList.remove('active');
+            document.getElementById('btnSprint').classList.remove('active');
+        }
+
+        function doAction(action) {
+            if (!connected) return;
+            socket.emit('action', { action: action });
+        }
+
+        function doActivate() {
+            if (!connected) return;
+            socket.emit('activate_item');
+        }
+
+        function doDeactivate() {
+            if (!connected) return;
+            socket.emit('deactivate_item');
+        }
+
+        function sendChat() {
+            const input = document.getElementById('chatInput');
+            const msg = input.value.trim();
+            if (!msg) return;
+            socket.emit('chat', { message: msg });
+            input.value = '';
+        }
+
+        function sendCmd() {
+            const input = document.getElementById('cmdInput');
+            const cmd = input.value.trim();
+            if (!cmd) return;
+            socket.emit('command', { command: cmd });
+            input.value = '';
+        }
+
+        function sendWhisper() {
+            if (!connected) return;
+            const player = document.getElementById('whisperPlayer').value.trim();
+            const message = document.getElementById('whisperMsg').value.trim();
+            if (!player || !message) return;
+            socket.emit('whisper', { player: player, message: message });
+            document.getElementById('whisperMsg').value = '';
+        }
+
+        function doLook() {
+            if (!connected) return;
+            const yaw = parseFloat(document.getElementById('yawInput').value) || 0;
+            const pitch = parseFloat(document.getElementById('pitchInput').value) || 0;
+            socket.emit('look', { yaw: yaw, pitch: pitch });
+        }
+
+        function doLookAt() {
+            if (!connected) return;
+            const player = document.getElementById('lookAtPlayer').value.trim();
+            if (!player) return;
+            socket.emit('look_at', { player: player });
+            document.getElementById('lookAtPlayer').value = '';
+        }
+
+        function doLookAtCoord() {
+            if (!connected) return;
+            const x = parseFloat(document.getElementById('lookAtX').value) || 0;
+            const y = parseFloat(document.getElementById('lookAtY').value) || 0;
+            const z = parseFloat(document.getElementById('lookAtZ').value) || 0;
+            socket.emit('look_at', { x: x, y: y, z: z });
+        }
+
+        function doGoto() {
+            if (!connected) return;
+            const x = parseInt(document.getElementById('gotoX').value) || 0;
+            const y = parseInt(document.getElementById('gotoY').value) || 0;
+            const z = parseInt(document.getElementById('gotoZ').value) || 0;
+            socket.emit('goto', { x: x, y: y, z: z });
+        }
+
+        function doFollow() {
+            if (!connected) return;
+            const player = document.getElementById('followPlayer').value.trim();
+            if (!player) return;
+            socket.emit('follow', { player: player });
+        }
+
+        function switchSlot(slot) {
+            if (!connected) return;
+            socket.emit('switch_slot', { slot: slot });
+        }
+
+        function moveToHotbar() {
+            if (!connected) return;
+            socket.emit('move_to_hotbar');
+        }
+
+        function doEquip() {
+            if (!connected) return;
+            const item = document.getElementById('equipItem').value.trim();
+            if (!item) return;
+            const dest = document.getElementById('equipDest').value;
+            socket.emit('equip', { item: item, destination: dest });
+            document.getElementById('equipItem').value = '';
+        }
+
+        function doUnequip() {
+            if (!connected) return;
+            const dest = document.getElementById('equipDest').value;
+            socket.emit('unequip', { destination: dest });
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            switch (e.key.toLowerCase()) {
+                case 'w': startMove('forward'); break;
+                case 'a': startMove('left'); break;
+                case 's': startMove('back'); break;
+                case 'd': startMove('right'); break;
+                case ' ': e.preventDefault(); doJump(); break;
+                case 'shift': toggleSneak(); break;
+                case 'control': toggleSprint(); break;
+                case 'q': doAction('drop'); break;
+                case 'e': doAction('interact'); break;
+                case 'f': doAction('attack'); break;
+                case 'arrowleft': e.preventDefault(); startRotate(5, 0); break;
+                case 'arrowright': e.preventDefault(); startRotate(-5, 0); break;
+                case 'arrowup': e.preventDefault(); startRotate(0, 5); break;
+                case 'arrowdown': e.preventDefault(); startRotate(0, -5); break;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            switch (e.key.toLowerCase()) {
+                case 'w': case 'a': case 's': case 'd':
+                    stopMove();
+                    break;
+                case 'arrowleft': case 'arrowright': case 'arrowup': case 'arrowdown':
+                    stopRotate();
+                    break;
+            }
+        });
+
+        document.addEventListener('touchmove', (e) => {
+            if (e.target.closest('.dpad-btn')) e.preventDefault();
+        }, { passive: false });
+
+        fetch('/api/config')
+            .then(r => r.json())
+            .then(cfg => {
+                document.getElementById('cfgHost').value = cfg.server?.host || '';
+                document.getElementById('cfgPort').value = cfg.server?.port || 25565;
+                document.getElementById('cfgVersion').value = cfg.server?.version || '1.21.4';
+                document.getElementById('cfgUsername').value = cfg.bot?.username || '';
+                document.getElementById('cfgPassword').value = cfg.bot?.password || '';
+                document.getElementById('cfgPrefix').value = cfg.command_prefix || '**';
+            })
+            .catch(() => {});
+    </script>
+</body>
+</html>

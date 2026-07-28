@@ -222,10 +222,22 @@ def send_equip(item_name: str, destination: str = "hand"):
     logger.info(f"[Bot → Equip] {item_name} → {destination}")
 
 
+def send_unequip(destination: str = "hand"):
+    """取消装备: destination = hand/head/torso/legs/feet/off-hand"""
+    _send_json({"type": "unequip", "destination": destination})
+    logger.info(f"[Bot → Unequip] {destination}")
+
+
 def send_dismount():
     """从坐骑上下来"""
     _send_json({"type": "dismount"})
     logger.info("[Bot → Dismount]")
+
+
+def send_move_to_hotbar():
+    """将背包中的所有物品移动到快捷栏空位"""
+    _send_json({"type": "move_to_hotbar"})
+    logger.info("[Bot → MoveToHotbar]")
 
 
 def send_set_control_state(control: str, state: bool):
@@ -253,3 +265,9 @@ def send_look(yaw: float | None = None, pitch: float = 0.0, *,
     else:
         _send_json({"type": "look", "yaw": yaw or 0, "pitch": pitch})
         logger.info(f"[Bot → Look] yaw={yaw} pitch={pitch}")
+
+
+def send_rotate(dyaw: float = 0.0, dpitch: float = 0.0):
+    """旋转视角（增量角度，单位：弧度）"""
+    _send_json({"type": "rotate", "dyaw": dyaw, "dpitch": dpitch})
+    logger.info(f"[Bot → Rotate] dyaw={dyaw}, dpitch={dpitch}")

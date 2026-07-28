@@ -18,10 +18,10 @@
   **dropall             — 丢出背包全部物品
   **clear               — 创造模式清除物品栏
   **slot <N>            — 切换到物品栏第 N 格 (1-9)
-"""
+  **rotate <水平°> [垂直°] — 旋转视角（增量角度）"""
 
 from command_manager import Command
-from utils import send_whisper, send_attack, send_attack_hold, send_dig, send_dig_hold, send_place, send_interact, send_dismount, send_use_item, send_use_item_hold, send_cancel, send_look, send_sneak, send_sprint, send_drop, send_clear_inventory, send_switch_slot
+from utils import send_whisper, send_attack, send_attack_hold, send_dig, send_dig_hold, send_place, send_interact, send_dismount, send_use_item, send_use_item_hold, send_cancel, send_look, send_sneak, send_sprint, send_drop, send_clear_inventory, send_switch_slot, send_rotate
 import threading
 import time
 
@@ -189,6 +189,23 @@ def _look_execute(conn, args: list[str], player: str):
     send_look(yaw=yaw_rad, pitch=pitch_rad)
 
 
+def _rotate_execute(conn, args: list[str], player: str):
+    """旋转视角（增量角度）"""
+    if not args:
+        send_whisper(player, "用法: **rotate <水平角度> [垂直角度]  (如 **rotate 90 0)")
+        return
+    try:
+        dyaw_deg = float(args[0])
+        dpitch_deg = float(args[1]) if len(args) > 1 else 0.0
+    except ValueError:
+        send_whisper(player, "角度必须是数字，如 **rotate 90 0")
+        return
+    dyaw_rad = math.radians(dyaw_deg)
+    dpitch_rad = math.radians(dpitch_deg)
+    send_rotate(dyaw_rad, dpitch_rad)
+    send_whisper(player, f"视角旋转: 水平{dyaw_deg}° 垂直{dpitch_deg}°")
+
+
 attack_command = Command.literal("attack").executes(_attack_execute)
 dig_command = Command.literal("dig").executes(_dig_execute)
 place_command = Command.literal("place").executes(_place_execute)
@@ -204,3 +221,4 @@ drop_command = Command.literal("drop").executes(_drop_execute)
 dropall_command = Command.literal("dropall").executes(_dropall_execute)
 clear_command = Command.literal("clear").executes(_clear_execute)
 slot_command = Command.literal("slot").executes(_slot_execute)
+rotate_command = Command.literal("rotate").executes(_rotate_execute)

@@ -29,8 +29,9 @@ from utils import (
     send_attack, send_attack_hold, send_dig, send_dig_hold,
     send_place, send_interact, send_use_item, send_use_item_hold,
     send_cancel, send_sneak, send_drop, send_switch_slot,
-    send_look,
-    send_activate_item, send_deactivate_item, send_equip, send_dismount,
+    send_look, send_rotate,
+    send_activate_item, send_deactivate_item, send_equip, send_unequip, send_dismount,
+    send_move_to_hotbar,
     send_set_control_state, send_status_request,
 )
 
@@ -390,6 +391,11 @@ class BotController:
         """看向坐标"""
         send_look(x=x, y=y, z=z)
 
+    def rotate(self, dyaw: float = 0.0, dpitch: float = 0.0):
+        """旋转视角（增量角度，单位：度）"""
+        import math
+        send_rotate(math.radians(dyaw), math.radians(dpitch))
+
     # ═══════════════════════════════════
     #  物品
     # ═══════════════════════════════════
@@ -422,6 +428,18 @@ class BotController:
             destination: 装备位置: hand/head/torso/legs/feet/off-hand
         """
         send_equip(item_name, destination)
+
+    def unequip(self, destination: str = "hand"):
+        """取消装备
+
+        Args:
+            destination: 装备位置: hand/head/torso/legs/feet/off-hand
+        """
+        send_unequip(destination)
+
+    def move_to_hotbar(self):
+        """将背包中的所有物品移动到快捷栏空位"""
+        send_move_to_hotbar()
 
     # ═══════════════════════════════════
     #  实体交互
