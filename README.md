@@ -1,74 +1,48 @@
-# mcbot-python
+# mcbot-web
 
-Minecraft Java Edition 聊天机器人，使用 **Mineflayer (Node.js)** 处理协议层，**Python** 实现命令控制等业务逻辑。支持**终端模式**和**Web 控制台**两种运行方式。
+Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基于 **Mineflayer + Express + SocketIO**。
+启动后在浏览器中可视化控制 Bot。
 
 ## 架构
 
 ```
-终端模式:                          Web 模式:
-┌─────────────────────────────┐   ┌──────────────────────────────┐
-│  Python 控制层 (main.py)    │   │  Flask Web 控制层 (web_app.py)│
-│  - 命令注册/分发             │   │  - SocketIO 实时通信           │
-│  - 聊天解析与 ANSI 输出      │   │  - Web 控制面板 (index.html)   │
-│  - bot_controller: 统一 API │   │  - bot_controller: 统一 API   │
-│    │ stdin/stdout JSON Lines│   │    │ stdin/stdout JSON Lines  │
-├─────────────────────────────┤   ├──────────────────────────────┤
-│  Node.js Mineflayer 代理    │   │  Node.js Mineflayer 代理      │
-│  - 自动处理 MC 协议          │   │  - 自动处理 MC 协议            │
-│  - 版本兼容                  │   │  - 版本兼容                    │
-└──────────┬──────────────────┘   └──────────┬───────────────────┘
-           │ TCP                             │ TCP
-    Minecraft 服务器                    Minecraft 服务器
+┌──────────────────────────────────────────────┐
+│  Node.js 控制层 (server.js)                   │
+│  - Express 静态文件服务                        │
+│  - SocketIO 实时 WebSocket 通信               │
+│  - Mineflayer 协议代理（同一进程，无 IPC）      │
+│  - 聊天命令系统（**command）                   │
+│  - 状态轮询 & 事件转发                         │
+│    │ TCP                                      │
+└────┼──────────────────────────────────────────┘
+     │
+  Minecraft 服务器
 ```
 
 ## 功能特性
 
 - **Mineflayer 协议代理**：Node.js Mineflayer 处理所有 MC 协议细节，兼容多版本
-- **Web 控制台**：Flask + SocketIO 实时 Web 面板，可视化移动控制、视角转动、状态监控
+- **Web 控制台**：SocketIO 实时 Web 面板，可视化移动控制、视角转动、状态监控
 - **聊天监听与命令响应**：监听公聊/私聊消息，响应 `command_prefix` 开头的玩家指令
-- **终端 ANSI 彩色输出**：游戏聊天消息带颜色显示在控制台
-- **交互式控制台**：终端可直接发送聊天/Bot 命令/MC 指令
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
 - **视角转动**：D-pad 方向键/键盘箭头增量旋转视角，支持绝对角度设置
-- **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/开箱/骑乘等）、使用物品（自动处理弩/弓时序）、潜行、疾跑、丢物品、切格子
+- **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/开箱/骑乘等）、使用物品、潜行、疾跑、丢物品、切格子
 - **背包管理**：背包物品移入快捷栏、装备/卸下物品
 - **实体交互**：骑乘、下马
 - **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品/潜行/疾跑/爬行/骑乘状态
 - **自动恢复**：死亡自动重生、断连自动重连（指数退避）、Web 面板一键重启
-- **玩家上下线追踪**：配置 `track_players` 后，指定玩家上下线时终端醒目提示
-- **测试命令**：游戏内 `**test` 运行自定义测试（框架模式，用户可添加自己的测试）
 
 ## 项目结构
 
 ```
-mcbot-python/
-├── main.py               # Python 入口（终端模式）：启动 Node 子进程、IPC 事件循环
-├── web_app.py            # Web 控制台入口：Flask + SocketIO 实时面板
-├── mineflayer_bot.js     # Mineflayer 代理：登录、消息收发、IPC 通信
-├── bot_controller.py     # Bot 统一控制 API（可直接 import 使用）
-├── chat_processor.py     # 聊天解析：JSON → 纯文本 + ANSI 输出
-├── command_manager.py    # 命令注册与分发系统
-├── utils.py              # IPC 工具函数（自动读取 config.json）
-├── test.py               # 功能测试脚本（19 项测试）
-├── ping_server.py        # 独立工具：探测服务器版本和在线人数
-├── player_tracker.py     # 指定玩家上下线追踪模块
-├── commands/
-│   ├── __init__.py         # 命令注册入口
-│   ├── help_command.py     # **help — 列出所有命令
-│   ├── send_command.py     # **send — 让 Bot 发送消息
-│   ├── cmd_command.py      # **cmd  — 执行 Minecraft 指令
-│   ├── respawn_command.py  # **respawn — 让 Bot 重生
-│   ├── restart_command.py  # **restart — 重启 Bot 进程
-│   ├── move_command.py     # **move/jump/stop/goto/follow — 移动控制
-│   ├── action_command.py   # **attack/dig/place/interact/use/sneak/sprint/drop/dropall/slot/look/rotate/cancel/dismount — 动作交互
-│   ├── test_command.py     # **test — 自定义测试框架
-│   └── ping_command.py     # **ping — 网络延迟测试
+mcbot-web/
+├── server.js            # 主入口：Express + SocketIO + Mineflayer
+├── mineflayer_bot.js    # 备用：独立 Mineflayer 代理（Python IPC 模式）
 ├── templates/
-│   └── index.html          # Web 控制台前端页面
-├── config.json             # 配置文件（服务器/用户名/密码/指令前缀）
-├── config.example.json     # 配置文件模板
-├── requirements.txt        # Python 依赖
-├── package.json            # Node.js 依赖
+│   └── index.html       # Web 控制台前端页面
+├── config.json           # 配置文件（服务器/用户名/密码/指令前缀）
+├── config.example.json   # 配置文件模板
+├── package.json          # Node.js 依赖
 └── README.md
 ```
 
@@ -76,7 +50,6 @@ mcbot-python/
 
 ### 前置要求
 
-- Python 3.10+
 - Node.js 18+
 - 目标 Minecraft 服务器需启用离线模式（offline mode）
 
@@ -85,7 +58,6 @@ mcbot-python/
 ```bash
 git clone https://github.com/RSSeeker/mcbot-python.git
 cd mcbot-python
-pip install -r requirements.txt
 npm install
 ```
 
@@ -117,28 +89,14 @@ npm install
 | `bot.username` | Bot 用户名 |
 | `bot.password` | 登录密码（离线模式留空） |
 | `command_prefix` | 游戏内指令前缀，可改为 `!`、`/` 等 |
-| `track_players` | 需要追踪上下线的玩家名列表，留空 `[]` 则不启用追踪 |
 
-### 运行
-
-```bash
-python main.py
-```
-
-启动后进入交互式控制台：
-
-- 直接输入文本 → Bot 发送聊天消息
-- `**` 开头 → 执行 Bot 命令（同游戏内）
-- `/` 开头 → Bot 执行 Minecraft 指令
-- `quit` → 退出程序
-
-### Web 控制台模式
+### 启动
 
 ```bash
-python web_app.py
+npm start
 ```
 
-启动后在浏览器访问 `http://localhost:5000` 即可打开可视控制面板，功能包括：
+启动后在浏览器打开 `http://localhost:5001`，可视控制面板功能包括：
 
 - **连接配置**：网页顶部填写服务器/用户名/密码等
 - **移动控制**：D-pad 方向键 + 跳跃/潜行/疾跑切换按钮，支持键盘 WASD/Q/E/F/Shift/Ctrl
@@ -151,43 +109,7 @@ python web_app.py
 - **装备控制**：指定物品名装备到指定槽位，一键卸下
 - **重启**：Bot 连接后一键重启
 
-### 运行测试
-
-```bash
-python test.py              # 完整测试（19 项）
-python test.py --quick      # 快速测试（基础功能）
-python test.py --interactive # 交互模式
-```
-
-### 查看在线人数
-
-```bash
-python ping_server.py
-```
-
-### 玩家上下线追踪
-
-在 `config.json` 中配置 `track_players` 即可启用：
-
-```json
-{
-    "track_players": ["Steve", "Alex"]
-}
-```
-
-- 留空 `[]` 或不填此字段 → 功能关闭
-- 支持追踪多个玩家
-- 当被追踪的玩家上线/下线时，终端会以醒目样式显示（绿色 ▲ 上线，红色 ▼ 下线）
-
-```
-==================================================
-  ▲ [玩家追踪] Steve 上线了！
-==================================================
-```
-
 ## 可用命令（游戏中）
-
-> 所有命令执行反馈均以 `/tell` 私发指令发出者，不会刷公屏。
 
 | 命令 | 说明 |
 |------|------|
@@ -198,108 +120,36 @@ python ping_server.py
 | `**jump` | 跳跃 |
 | `**stop` | 停止所有移动 |
 | `**goto <x> <y> <z>` | 寻路到目标坐标 |
-| `**follow <玩家>` | 跟随指定玩家 |
-| `**look <偏航> [俯仰]` | 设置视角角度 |
-| `**look at <玩家>` | 看向指定玩家 |
+| `**follow <玩家> [距离]` | 跟随指定玩家 |
+| `**look <偏航> [俯仰]` | 设置绝对视角角度 |
 | `**rotate <水平°> [垂直°]` | 旋转视角（增量角度，如 `**rotate 90 -30`） |
 | `**attack [时间]` | 攻击视线中的实体，时间参数指定长按毫秒数 |
 | `**dig [时间]` | 挖掘视线中的方块，时间参数指定长按毫秒数 |
 | `**place` | 放置方块（对准方块表面） |
 | `**interact` | 与方块/实体交互（开门/开箱/拉杆/村民交易/骑乘载具等） |
 | `**dismount` | 离开当前载具 |
-| `**use` | 使用手持物品（吃东西/射箭/投掷/放水桶等，自动处理弩/弓时序） |
-| `**usehold [时间]` | 长按使用手持物品（如吃东西/拉弓），默认2000ms |
+| `**use` | 使用手持物品 |
+| `**usehold [时间]` | 长按使用手持物品，默认2000ms |
 | `**sneak` | 切换潜行状态（蹲下/起身） |
 | `**sprint` | 切换疾跑状态 |
 | `**drop` | 丢出手持物品 |
 | `**dropall` | 丢出全部物品 |
-| `**clear` | 创造模式清除物品栏 |
 | `**slot <1-9>` | 切换到快捷栏第 N 格 |
 | `**equip <物品名> <槽位>` | 装备物品到指定槽位（hand/off-hand/head/torso/legs/feet） |
 | `**unequip <槽位>` | 卸下指定槽位的物品 |
 | `**movetohotbar` | 将背包物品移入快捷栏的空位 |
 | `**cancel` | 取消所有操作 |
 | `**respawn` | 重生 |
-| `**restart` | 重启 Bot 进程 |
-| `**test` | 运行自定义测试（需在 test_command.py 中配置） |
+| `**ping` | 延迟测试 |
 
 > 指令前缀通过 `config.json` 中的 `command_prefix` 修改。
 
-## Python API 使用
-
-`bot_controller.py` 提供统一控制接口，可在脚本中直接 import：
-
-```python
-from bot_controller import BotController
-
-# 方式1：使用配置文件
-bot = BotController()
-bot.connect()
-
-# 方式2：直接指定参数（覆盖配置文件）
-bot = BotController(
-    host="mc.hypixel.net",
-    port=25565,
-    version="1.21.4",
-    username="MyBot",
-    password="mypassword",
-    command_prefix="!!"
-)
-bot.connect()
-
-# 常用操作
-bot.chat("Hello!")               # 公聊
-bot.whisper("玩家名", "你好")      # 私聊
-bot.move_forward(3000)            # 前进 3 秒
-bot.jump()                        # 跳跃
-bot.look(90, 0)                   # 设置绝对视角
-bot.rotate(90, 0)                 # 增量旋转视角（度）
-bot.attack()                     # 攻击实体
-bot.dig()                        # 挖掘方块
-bot.place()                      # 放置方块
-bot.interact()                   # 交互（开门/开箱/骑乘等）
-bot.dismount()                   # 离开载具
-bot.use_item()                   # 使用手持物品（自动处理弩/弓）
-bot.sneak(True)                   # 蹲下
-bot.sprint(True)                   # 开始疾跑
-bot.switch_slot(1)                # 切第 1 格
-bot.drop()                        # 丢物品
-bot.equip("diamond_sword")        # 装备物品
-status = bot.get_status()         # 查询状态
-
-bot.disconnect()
-
-# 也支持上下文管理器，自动断开
-with BotController() as bot:
-    bot.chat("自动连接和断开")
-```
-
-### BotController 参数说明
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `config_path` | str | 配置文件路径（默认 `config.json`） |
-| `host` | str | 服务器地址（覆盖配置文件） |
-| `port` | int | 服务器端口（覆盖配置文件） |
-| `version` | str | Minecraft 版本（覆盖配置文件） |
-| `username` | str | Bot 玩家名（覆盖配置文件） |
-| `password` | str | 登录密码（覆盖配置文件） |
-| `command_prefix` | str | 命令前缀（覆盖配置文件） |
-
-所有参数均为可选，如果不指定则使用 `config.json` 中的默认值。
-
 ## 依赖
-
-### Python
-
-- `flask` — Web 框架（Web 控制台模式）
-- `flask-socketio` — WebSocket 实时通信（Web 控制台模式）
-- 其余全部使用标准库：`subprocess`、`threading`、`json`、`re`、`logging`、`os`、`time`、`argparse`
-
-### Node.js
 
 - [mineflayer](https://github.com/PrismarineJS/mineflayer) — Minecraft 协议客户端库
 - [mineflayer-pathfinder](https://github.com/PrismarineJS/mineflayer-pathfinder) — 寻路与移动插件
+- [express](https://expressjs.com/) — HTTP 服务器
+- [socket.io](https://socket.io/) — WebSocket 实时通信
 
 ## License
 

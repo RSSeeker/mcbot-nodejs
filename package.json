@@ -1,9 +1,10 @@
 {
-  "name": "mcbot-python",
-  "version": "1.0.0",
-  "description": "一个纯 Python 实现的 Minecraft Java Edition (1.21.4) 聊天机器人，通过原生 TCP Socket 与 Minecraft 服务器通信，不依赖任何 Minecraft 第三方库。",
-  "main": "index.js",
+  "name": "mcbot-web",
+  "version": "2.0.0",
+  "description": "纯 Node.js Minecraft 聊天机器人网页控制台，基于 Mineflayer + Express + SocketIO",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -19,7 +20,10 @@
   },
   "homepage": "https://github.com/RSSeeker/mcbot-python#readme",
   "dependencies": {
+    "express": "^4.22.2",
     "mineflayer": "^4.37.1",
-    "mineflayer-pathfinder": "^2.4.5"
+    "mineflayer-pathfinder": "^2.4.5",
+    "socket.io": "^4.8.3",
+    "vec3": "^0.1.10"
   }
 }
