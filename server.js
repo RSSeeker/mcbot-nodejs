@@ -46,6 +46,8 @@ let restarting = false;
 let bowTimer = null;
 let isLeftClickHolding = false;
 let isRightClickHolding = false;
+let flyTimer = null;
+let isFlying = false;
 const MAX_RECONNECT_DELAY = 60000;
 const BASE_RECONNECT_DELAY = 3000;
 const LOOK_ROTATION_DELAY_MS = 120;
@@ -58,7 +60,7 @@ const currentStatus = {
     yaw: 0, pitch: 0,
     heldItem: '',
     isSprinting: false, isSneaking: false,
-    isCrawling: false, isRiding: false,
+    isCrawling: false, isRiding: false, isFlying: false,
     username: '', host: '', port: 0,
 };
 const chatLog = [];
@@ -84,10 +86,12 @@ function addEvent(etype, msg) {
 function createBot(overrides = {}) {
     if (moveTimer) { clearTimeout(moveTimer); moveTimer = null; }
     if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
+    if (flyTimer) { clearTimeout(flyTimer); flyTimer = null; }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     shouldReconnect = true;
     activeMoveDir = null;
     movements = null;
+    isFlying = false;
 
     const botOpts = {
         host: overrides.host || config.server.host,
@@ -243,6 +247,7 @@ function startStatusPolling() {
         currentStatus.isSprinting = bot.getControlState('sprint');
         currentStatus.isCrawling = bot.entity.pose === 'swimming';
         currentStatus.isRiding = !!bot.entity.vehicle;
+        currentStatus.isFlying = isFlying;
         const held = bot.heldItem;
         currentStatus.heldItem = held ? (held.displayName || held.name) : '空手';
         io.emit('status', currentStatus);
@@ -274,6 +279,7 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect_bot', () => {
         shouldReconnect = false;
+        isFlying = false;
         if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
         if (bot) {
             try { bot.quit(); } catch (e) {}
@@ -441,6 +447,17 @@ io.on('connection', (socket) => {
         bot.setControlState(data.control, data.state);
     });
 
+    socket.on('pick_block', () => {
+        if (!bot) return;
+        pickBlock();
+    });
+
+    socket.on('fly', (data) => {
+        if (!bot) return;
+        const state = data && data.state !== undefined ? data.state : !isFlying;
+        toggleFly(state);
+    });
+
     socket.on('request_status', () => {
         if (bot && currentStatus.connected) {
             socket.emit('status', currentStatus);
@@ -449,6 +466,7 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         shouldReconnect = false;
+        isFlying = false;
         log('info', 'Web 客户端已断开，关闭 Bot');
         if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
         if (bot) {
@@ -632,12 +650,104 @@ function handleAction(action) {
             stopMove();
             if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; }
             if (isRightClickHolding) { bot.deactivateItem(); isRightClickHolding = false; }
+            if (isFlying) { toggleFly(false); }
             bot.clearControlStates();
             bot.pathfinder.stop();
             break;
         case 'respawn':
             bot._client.write('client_command', { actionId: 0 });
             break;
+    }
+}
+
+function pickBlock() {
+    if (!bot) return;
+    const block = bot.blockAtCursor();
+    if (!block) {
+        log('warn', '未瞄准任何方块');
+        return;
+    }
+    const blockName = block.name;
+    let item = bot.registry.itemsByName[blockName];
+    if (!item) {
+        const shortName = blockName.replace(/^minecraft:/, '');
+        item = bot.registry.itemsByName[shortName];
+    }
+    if (!item) {
+        log('warn', `找不到方块 "${blockName}" 对应的物品`);
+        return;
+    }
+    if (bot.game && bot.game.gameMode === 'creative') {
+        const hotbarSlot = 36 + bot.quickBarSlot;
+        try {
+            const Item = require('prismarine-item')(bot.registry);
+            bot.creative.setInventorySlot(hotbarSlot, new Item(item.id, 1));
+            log('info', `已选取方块: ${item.displayName || item.name}`);
+            addEvent('pick_block', item.displayName || item.name);
+        } catch (err) {
+            log('warn', `选取方块失败: ${err.message}`);
+        }
+    } else {
+        const existing = bot.inventory.items().find(i => i.name === item.name);
+        if (existing) {
+            bot.setQuickBarSlot(existing.slot - 36);
+            log('info', `已切换到: ${item.displayName || item.name}`);
+            addEvent('pick_block', item.displayName || item.name);
+        } else {
+            log('warn', `背包中没有 "${item.displayName || item.name}"`);
+        }
+    }
+}
+
+function toggleFly(state) {
+    if (!bot) return;
+    const gameMode = bot.game ? bot.game.gameMode : '';
+    if (gameMode !== 'creative' && gameMode !== 'spectator') {
+        log('warn', '飞行仅在创造/旁观模式下可用');
+        return;
+    }
+    if (state) {
+        if (isFlying) return;
+        isFlying = true;
+        try {
+            bot.creative.startFlying();
+        } catch (e) {
+            bot.setControlState('jump', true);
+            bot.setControlState('jump', false);
+            setTimeout(() => {
+                bot.setControlState('jump', true);
+                bot.setControlState('jump', false);
+            }, 150);
+        }
+        if (flyTimer) { clearInterval(flyTimer); flyTimer = null; }
+        flyTimer = setInterval(() => {
+            if (!bot || !isFlying) {
+                if (flyTimer) { clearInterval(flyTimer); flyTimer = null; }
+                return;
+            }
+            const jumpHeld = bot.getControlState('jump');
+            const sneakHeld = bot.getControlState('sneak');
+            if (jumpHeld && !sneakHeld) {
+                bot.entity.velocity = new Vec3(bot.entity.velocity.x, 0.5, bot.entity.velocity.z);
+            } else if (sneakHeld && !jumpHeld) {
+                bot.entity.velocity = new Vec3(bot.entity.velocity.x, -0.5, bot.entity.velocity.z);
+            } else {
+                bot.entity.velocity = new Vec3(bot.entity.velocity.x, 0, bot.entity.velocity.z);
+            }
+        }, 50);
+        log('info', '飞行模式已开启 (空格上升，Shift下降)');
+        addEvent('fly', 'start');
+    } else {
+        if (!isFlying) return;
+        isFlying = false;
+        if (flyTimer) { clearInterval(flyTimer); flyTimer = null; }
+        try {
+            bot.creative.stopFlying();
+        } catch (e) {}
+        bot.setControlState('jump', false);
+        bot.setControlState('sneak', false);
+        log('info', '飞行模式已关闭');
+        addEvent('fly', 'stop');
     }
 }
 
@@ -818,6 +928,8 @@ function executeCommand(line, playerName) {
                 '**equip <物品名> <槽位> - 装备',
                 '**unequip <槽位> - 卸下',
                 '**movetohotbar - 背包物品移入快捷栏',
+                '**pickblock - 选取准星方块',
+                '**fly [on/off] - 切换飞行模式',
                 '**ping - 延迟测试',
                 '**restart - 进程级重启',
             ];
@@ -972,6 +1084,25 @@ function executeCommand(line, playerName) {
         case 'movetohotbar':
             moveToHotbar();
             reply('背包物品移入快捷栏');
+            break;
+        case 'pickblock':
+            pickBlock();
+            reply('选取方块');
+            break;
+        case 'fly':
+            if (args.length > 0) {
+                const flyState = args[0].toLowerCase();
+                if (flyState === 'on' || flyState === '1' || flyState === 'true') {
+                    toggleFly(true);
+                } else if (flyState === 'off' || flyState === '0' || flyState === 'false') {
+                    toggleFly(false);
+                } else {
+                    reply('用法: **fly on/off');
+                }
+            } else {
+                toggleFly(!isFlying);
+            }
+            reply(isFlying ? '飞行模式已开启' : '飞行模式已关闭');
             break;
         case 'ping':
             const start = Date.now();

@@ -427,6 +427,7 @@
                 <span id="badgeSprint" class="status-badge" style="display:none;">⚡ 疾跑</span>
                 <span id="badgeCrawl" class="status-badge" style="display:none;">🕳️ 爬行</span>
                 <span id="badgeRide" class="status-badge" style="display:none;">🐴 骑乘</span>
+                <span id="badgeFly" class="status-badge" style="display:none;">🕊️ 飞行</span>
             </div>
 
             <div class="panel-title">🎯 移动控制</div>
@@ -516,6 +517,8 @@
                 <button class="action-btn" onclick="doAction('drop')">🗑 丢弃</button>
                 <button class="action-btn" onclick="doAction('drop_all')">🗑 全丢</button>
                 <button class="action-btn" onclick="doAction('dismount')">🐴 下马</button>
+                <button class="action-btn" onclick="doPickBlock()">🎯 选取方块</button>
+                <button class="action-btn" id="btnFly" onclick="doFly()">🕊️ 飞行</button>
                 <button class="action-btn danger" onclick="doAction('cancel')">✖ 取消</button>
                 <button class="action-btn" onclick="doAction('respawn')" style="grid-column: span 3;">🔄 重生</button>
             </div>
@@ -657,14 +660,30 @@
             const badgeSprint = document.getElementById('badgeSprint');
             const badgeCrawl = document.getElementById('badgeCrawl');
             const badgeRide = document.getElementById('badgeRide');
+            const badgeFly = document.getElementById('badgeFly');
             badgeSneak.style.display = data.isSneaking ? '' : 'none';
             badgeSprint.style.display = data.isSprinting ? '' : 'none';
             badgeCrawl.style.display = data.isCrawling ? '' : 'none';
             badgeRide.style.display = data.isRiding ? '' : 'none';
+            badgeFly.style.display = data.isFlying ? '' : 'none';
             if (data.isSneaking) badgeSneak.style.background = '#e94560'; else badgeSneak.style.background = '';
             if (data.isSprinting) badgeSprint.style.background = '#ffa502'; else badgeSprint.style.background = '';
             if (data.isCrawling) badgeCrawl.style.background = '#2ed573'; else badgeCrawl.style.background = '';
             if (data.isRiding) badgeRide.style.background = '#00d2ff'; else badgeRide.style.background = '';
+            if (data.isFlying) badgeFly.style.background = '#00d2ff'; else badgeFly.style.background = '';
+            if (data.isFlying !== undefined) {
+                flyActive = data.isFlying;
+                const btnFly = document.getElementById('btnFly');
+                if (flyActive) {
+                    btnFly.classList.add('active');
+                    btnFly.style.background = 'var(--accent2)';
+                    btnFly.style.color = '#000';
+                } else {
+                    btnFly.classList.remove('active');
+                    btnFly.style.background = '';
+                    btnFly.style.color = '';
+                }
+            }
         }
 
         function addChatMsg(sender, message) {
@@ -749,9 +768,21 @@
             });
         }
 
+        let jumpHeld = false;
         function doJump() {
             if (!connected) return;
-            socket.emit('jump');
+            if (flyActive) {
+                jumpHeld = !jumpHeld;
+                socket.emit('set_control', { control: 'jump', state: jumpHeld });
+                const btnJump = document.getElementById('btnJump');
+                if (jumpHeld) {
+                    btnJump.classList.add('active');
+                } else {
+                    btnJump.classList.remove('active');
+                }
+            } else {
+                socket.emit('jump');
+            }
         }
 
         function startRotate(dyaw, dpitch) {
@@ -796,13 +827,42 @@
             stopMove();
             if (sneakActive) { sneakActive = false; socket.emit('set_control', { control: 'sneak', state: false }); }
             if (sprintActive) { sprintActive = false; socket.emit('set_control', { control: 'sprint', state: false }); }
+            if (flyActive) { flyActive = false; socket.emit('fly', { state: false }); }
+            if (jumpHeld) { jumpHeld = false; socket.emit('set_control', { control: 'jump', state: false }); }
             document.getElementById('btnSneakTgl').classList.remove('active');
             document.getElementById('btnSprint').classList.remove('active');
+            document.getElementById('btnJump').classList.remove('active');
+            const btnFly = document.getElementById('btnFly');
+            btnFly.classList.remove('active');
+            btnFly.style.background = '';
+            btnFly.style.color = '';
         }
 
         function doAction(action) {
             if (!connected) return;
             socket.emit('action', { action: action });
+        }
+
+        function doPickBlock() {
+            if (!connected) return;
+            socket.emit('pick_block');
+        }
+
+        let flyActive = false;
+        function doFly() {
+            if (!connected) return;
+            flyActive = !flyActive;
+            socket.emit('fly', { state: flyActive });
+            const btnFly = document.getElementById('btnFly');
+            if (flyActive) {
+                btnFly.classList.add('active');
+                btnFly.style.background = 'var(--accent2)';
+                btnFly.style.color = '#000';
+            } else {
+                btnFly.classList.remove('active');
+                btnFly.style.background = '';
+                btnFly.style.color = '';
+            }
         }
 
         function doActivate() {
@@ -916,12 +976,27 @@
                 return;
             }
             switch (key) {
-                case ' ': e.preventDefault(); doJump(); break;
-                case 'shift': toggleSneak(); break;
+                case ' ': 
+                    e.preventDefault();
+                    if (flyActive) {
+                        socket.emit('set_control', { control: 'jump', state: true });
+                    } else {
+                        doJump();
+                    }
+                    break;
+                case 'shift':
+                    if (flyActive) {
+                        socket.emit('set_control', { control: 'sneak', state: true });
+                    } else {
+                        toggleSneak();
+                    }
+                    break;
                 case 'control': toggleSprint(); break;
                 case 'q': doAction('drop'); break;
                 case 'e': doAction('interact'); break;
                 case 'f': doAction('attack'); break;
+                case 'b': doPickBlock(); break;
+                case 'v': doFly(); break;
                 case 'arrowleft': e.preventDefault(); startRotate(5, 0); break;
                 case 'arrowright': e.preventDefault(); startRotate(-5, 0); break;
                 case 'arrowup': e.preventDefault(); startRotate(0, 5); break;
@@ -941,6 +1016,16 @@
                 return;
             }
             switch (key) {
+                case ' ':
+                    if (flyActive) {
+                        socket.emit('set_control', { control: 'jump', state: false });
+                    }
+                    break;
+                case 'shift':
+                    if (flyActive) {
+                        socket.emit('set_control', { control: 'sneak', state: false });
+                    }
+                    break;
                 case 'arrowleft': case 'arrowright': case 'arrowup': case 'arrowdown':
                     stopRotate();
                     break;
@@ -950,6 +1035,20 @@
         document.addEventListener('touchmove', (e) => {
             if (e.target.closest('.dpad-btn')) e.preventDefault();
         }, { passive: false });
+
+        document.addEventListener('mousedown', (e) => {
+            if (e.button === 1) {
+                e.preventDefault();
+                doPickBlock();
+            }
+        });
+
+        document.addEventListener('contextmenu', (e) => {
+            if (e.target.closest('.dpad-btn') || e.target.closest('.action-btn') ||
+                e.target.closest('.slot-btn') || e.target.closest('.toggle-btn')) {
+                e.preventDefault();
+            }
+        });
 
         fetch('/api/config')
             .then(r => r.json())
