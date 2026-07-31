@@ -351,6 +351,42 @@
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-track { background: #000; }
         ::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+
+        .viewer-container {
+            display: none;
+            width: 100%;
+            height: 50vh;
+            border-top: 1px solid var(--border);
+            background: #000;
+            position: relative;
+        }
+        .viewer-container.active { display: block; }
+        .viewer-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        .viewer-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-dim);
+            font-size: 14px;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .viewer-placeholder .icon { font-size: 48px; opacity: 0.5; }
+        .btn-viewer {
+            background: var(--accent2);
+            border-color: var(--accent2);
+            color: #000;
+        }
+        .btn-viewer.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -364,6 +400,7 @@
             <button class="btn btn-connect" id="btnConnect" onclick="connectBot()">连接 Bot</button>
             <button class="btn btn-disconnect" id="btnDisconnect" onclick="disconnectBot()" style="display:none;">断开</button>
             <button class="btn btn-accent2" id="btnRestart" onclick="restartBot()" style="display:none;">🔄 重启</button>
+            <button class="btn btn-viewer" id="btnViewer" onclick="toggleViewer()" style="display:none;">👁️ 画面</button>
         </div>
     </div>
 
@@ -382,6 +419,12 @@
         <input type="text" id="cfgPassword" placeholder="密码" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:70px;">
         <label style="font-size:10px;color:var(--text-dim);">命令前缀:</label>
         <input type="text" id="cfgPrefix" placeholder="**" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:45px;">
+        <label style="font-size:10px;color:var(--text-dim);">画面端口:</label>
+        <input type="number" id="cfgViewerPort" placeholder="3000" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:55px;">
+        <label style="font-size:10px;color:var(--text-dim);">视距:</label>
+        <input type="number" id="cfgViewDistance" placeholder="10" min="2" max="20" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:45px;">
+        <label style="font-size:10px;color:var(--text-dim);">追踪玩家:</label>
+        <input type="text" id="cfgTrackPlayers" placeholder="玩家名,逗号分隔" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:110px;">
     </div>
 
     <div class="main-layout">
@@ -586,6 +629,15 @@
         </div>
     </div>
 
+    <!-- 画面渲染面板 -->
+    <div class="viewer-container" id="viewerContainer">
+        <div class="viewer-placeholder" id="viewerPlaceholder">
+            <div class="icon">👁️</div>
+            <div>连接 Bot 后可查看机器人画面</div>
+        </div>
+        <iframe id="viewerFrame" src="" style="display:none;" allow="cross-origin-isolated"></iframe>
+    </div>
+
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io();
@@ -594,6 +646,8 @@
         let sprintActive = false;
         let moveTimer = null;
         let rotateTimer = null;
+        let viewerActive = false;
+        let viewerPort = 3000;
 
         const slotBar = document.getElementById('slotBar');
         for (let i = 1; i <= 9; i++) {
@@ -618,11 +672,27 @@
         socket.on('bot_disconnected', () => {
             connected = false;
             updateConnectionUI(false);
+            if (viewerActive) toggleViewer();
+            document.getElementById('btnViewer').style.display = 'none';
             addLog('info', 'Bot 已断开');
         });
 
         socket.on('bot_error', (data) => addLog('error', data.msg));
         socket.on('bot_event', (data) => addLog('info', `[${data.type}] ${JSON.stringify(data.data)}`));
+
+        socket.on('viewer_status', (data) => {
+            if (data.active) {
+                viewerPort = data.port || 3000;
+                document.getElementById('btnViewer').style.display = '';
+                document.getElementById('viewerPlaceholder').innerHTML =
+                    '<div class="icon">👁️</div><div>点击上方「👁️ 画面」按钮查看机器人视角</div>';
+            } else {
+                document.getElementById('btnViewer').style.display = 'none';
+                if (viewerActive) toggleViewer();
+                document.getElementById('viewerPlaceholder').innerHTML =
+                    '<div class="icon">👁️</div><div>连接 Bot 后可查看机器人画面</div>';
+            }
+        });
 
         function updateConnectionUI(isConnected) {
             document.getElementById('btnConnect').style.display = isConnected ? 'none' : '';
@@ -725,6 +795,9 @@
                 username: document.getElementById('cfgUsername').value.trim() || undefined,
                 password: document.getElementById('cfgPassword').value.trim() || undefined,
                 command_prefix: document.getElementById('cfgPrefix').value.trim() || undefined,
+                viewer_port: document.getElementById('cfgViewerPort').value.trim() || undefined,
+                viewer_view_distance: document.getElementById('cfgViewDistance').value.trim() || undefined,
+                track_players: document.getElementById('cfgTrackPlayers').value.trim() || undefined,
             };
             Object.keys(configData).forEach(k => { if (!configData[k]) delete configData[k]; });
             socket.emit('connect_bot', configData);
@@ -963,20 +1036,69 @@
             socket.emit('unequip', { destination: dest });
         }
 
-        const movementKeys = { w: 'forward', a: 'left', s: 'back', d: 'right' };
+        function toggleViewer() {
+            const container = document.getElementById('viewerContainer');
+            const iframe = document.getElementById('viewerFrame');
+            const placeholder = document.getElementById('viewerPlaceholder');
+            const btn = document.getElementById('btnViewer');
+            const mainLayout = document.querySelector('.main-layout');
+
+            viewerActive = !viewerActive;
+
+            if (viewerActive) {
+                container.classList.add('active');
+                btn.classList.add('active');
+                btn.textContent = '👁️ 隐藏画面';
+                placeholder.style.display = 'none';
+                iframe.style.display = '';
+                iframe.src = `http://localhost:${viewerPort}/`;
+                mainLayout.style.height = 'calc(50vh - 62px)';
+            } else {
+                container.classList.remove('active');
+                btn.classList.remove('active');
+                btn.textContent = '👁️ 画面';
+                placeholder.style.display = '';
+                iframe.style.display = 'none';
+                iframe.src = '';
+                mainLayout.style.height = 'calc(100vh - 62px)';
+            }
+        }
+
+        const DEFAULT_KEYBINDINGS = {
+            forward: 'w', left: 'a', back: 's', right: 'd',
+            jump: ' ', sneak: 'shift', sprint: 'control',
+            drop: 'q', interact: 'e', attack: 'f',
+            pick_block: 'b', fly: 'v',
+            rotate_left: 'arrowleft', rotate_right: 'arrowright',
+            rotate_up: 'arrowup', rotate_down: 'arrowdown'
+        };
+        let keyBindings = { ...DEFAULT_KEYBINDINGS };
+        let keyToAction = {};
+
+        function buildKeyMap() {
+            keyToAction = {};
+            for (const [action, key] of Object.entries(keyBindings)) {
+                if (key) keyToAction[key.toLowerCase()] = action;
+            }
+        }
+        buildKeyMap();
         const activeKeys = new Set();
 
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT') return;
-            const key = e.key.toLowerCase();
-            if (movementKeys[key]) {
-                if (activeKeys.has(key)) return;
-                activeKeys.add(key);
-                startMove(movementKeys[key]);
+            const rawKey = e.key.toLowerCase();
+            const action = keyToAction[rawKey];
+            if (!action) return;
+
+            if (['forward', 'left', 'back', 'right'].includes(action)) {
+                if (activeKeys.has(rawKey)) return;
+                activeKeys.add(rawKey);
+                startMove(action);
                 return;
             }
-            switch (key) {
-                case ' ': 
+
+            switch (action) {
+                case 'jump':
                     e.preventDefault();
                     if (flyActive) {
                         socket.emit('set_control', { control: 'jump', state: true });
@@ -984,49 +1106,53 @@
                         doJump();
                     }
                     break;
-                case 'shift':
+                case 'sneak':
                     if (flyActive) {
                         socket.emit('set_control', { control: 'sneak', state: true });
                     } else {
                         toggleSneak();
                     }
                     break;
-                case 'control': toggleSprint(); break;
-                case 'q': doAction('drop'); break;
-                case 'e': doAction('interact'); break;
-                case 'f': doAction('attack'); break;
-                case 'b': doPickBlock(); break;
-                case 'v': doFly(); break;
-                case 'arrowleft': e.preventDefault(); startRotate(5, 0); break;
-                case 'arrowright': e.preventDefault(); startRotate(-5, 0); break;
-                case 'arrowup': e.preventDefault(); startRotate(0, 5); break;
-                case 'arrowdown': e.preventDefault(); startRotate(0, -5); break;
+                case 'sprint': toggleSprint(); break;
+                case 'drop': doAction('drop'); break;
+                case 'interact': doAction('interact'); break;
+                case 'attack': doAction('attack'); break;
+                case 'pick_block': doPickBlock(); break;
+                case 'fly': doFly(); break;
+                case 'rotate_left': e.preventDefault(); startRotate(5, 0); break;
+                case 'rotate_right': e.preventDefault(); startRotate(-5, 0); break;
+                case 'rotate_up': e.preventDefault(); startRotate(0, 5); break;
+                case 'rotate_down': e.preventDefault(); startRotate(0, -5); break;
             }
         });
 
         document.addEventListener('keyup', (e) => {
-            const key = e.key.toLowerCase();
-            if (movementKeys[key]) {
-                activeKeys.delete(key);
-                socket.emit('set_control', { control: movementKeys[key], state: false });
+            const rawKey = e.key.toLowerCase();
+            const action = keyToAction[rawKey];
+            if (!action) return;
+
+            if (['forward', 'left', 'back', 'right'].includes(action)) {
+                activeKeys.delete(rawKey);
+                socket.emit('set_control', { control: action, state: false });
                 const btnMap = { forward: 'btnW', back: 'btnS', left: 'btnA', right: 'btnD' };
-                const btn = document.getElementById(btnMap[movementKeys[key]]);
+                const btn = document.getElementById(btnMap[action]);
                 if (btn) btn.classList.remove('active');
                 if (activeKeys.size === 0) stopMove();
                 return;
             }
-            switch (key) {
-                case ' ':
+
+            switch (action) {
+                case 'jump':
                     if (flyActive) {
                         socket.emit('set_control', { control: 'jump', state: false });
                     }
                     break;
-                case 'shift':
+                case 'sneak':
                     if (flyActive) {
                         socket.emit('set_control', { control: 'sneak', state: false });
                     }
                     break;
-                case 'arrowleft': case 'arrowright': case 'arrowup': case 'arrowdown':
+                case 'rotate_left': case 'rotate_right': case 'rotate_up': case 'rotate_down':
                     stopRotate();
                     break;
             }
@@ -1059,6 +1185,14 @@
                 document.getElementById('cfgUsername').value = cfg.bot?.username || '';
                 document.getElementById('cfgPassword').value = cfg.bot?.password || '';
                 document.getElementById('cfgPrefix').value = cfg.command_prefix || '**';
+                document.getElementById('cfgViewerPort').value = cfg.viewer_port || 3000;
+                document.getElementById('cfgViewDistance').value = cfg.viewer_view_distance || 10;
+                document.getElementById('cfgTrackPlayers').value = (cfg.track_players || []).join(',');
+                if (cfg.viewer_port) viewerPort = cfg.viewer_port;
+                if (cfg.keybindings) {
+                    keyBindings = { ...DEFAULT_KEYBINDINGS, ...cfg.keybindings };
+                    buildKeyMap();
+                }
             })
             .catch(() => {});
     </script>

@@ -19,6 +19,7 @@ const { pathfinder } = require('mineflayer-pathfinder');
 const Movements = require('mineflayer-pathfinder').Movements;
 const { GoalBlock, GoalFollow } = require('mineflayer-pathfinder').goals;
 const { Vec3 } = require('vec3');
+const { mineflayer: mineflayerViewer } = require('prismarine-viewer');
 
 // ── 加载配置 ──
 const configPath = path.join(__dirname, 'config.json');
@@ -32,7 +33,7 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(express.static(path.join(__dirname, 'templates')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'templates', 'index.html')));
-app.get('/api/config', (req, res) => res.json(config));
+app.get('/api/config', (req, res) => res.json({ ...config, viewer_port: viewerPort }));
 
 // ── 全局状态 ──
 let bot = null;
@@ -48,6 +49,9 @@ let isLeftClickHolding = false;
 let isRightClickHolding = false;
 let flyTimer = null;
 let isFlying = false;
+let viewer = null;
+let viewerPort = config.viewer_port || 3000;
+let viewerViewDistance = config.viewer_view_distance || 10;
 const MAX_RECONNECT_DELAY = 60000;
 const BASE_RECONNECT_DELAY = 3000;
 const LOOK_ROTATION_DELAY_MS = 120;
@@ -88,6 +92,7 @@ function createBot(overrides = {}) {
     if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
     if (flyTimer) { clearTimeout(flyTimer); flyTimer = null; }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (viewer) { closeViewer(); }
     shouldReconnect = true;
     activeMoveDir = null;
     movements = null;
@@ -102,6 +107,11 @@ function createBot(overrides = {}) {
         hideErrors: false,
     };
     const password = overrides.password || config.bot.password || '';
+    if (overrides.viewer_port) viewerPort = parseInt(overrides.viewer_port) || 3000;
+    if (overrides.viewer_view_distance) viewerViewDistance = parseInt(overrides.viewer_view_distance) || 10;
+    const trackPlayers = overrides.track_players
+        ? overrides.track_players.split(',').map(s => s.trim()).filter(Boolean)
+        : (config.track_players || []);
 
     bot = mineflayer.createBot(botOpts);
     bot.loadPlugin(pathfinder);
@@ -164,6 +174,7 @@ function createBot(overrides = {}) {
         io.emit('bot_event', { type: 'end', data: { reason } });
         currentStatus.connected = false;
         io.emit('status', currentStatus);
+        closeViewer();
         scheduleReconnect();
     });
 
@@ -184,6 +195,8 @@ function createBot(overrides = {}) {
 
         movements = new Movements(bot);
         bot.pathfinder.setMovements(movements);
+
+        startViewer();
 
         if (password) {
             setTimeout(() => {
@@ -254,6 +267,30 @@ function startStatusPolling() {
     }, 1000);
 }
 
+// ── 画面渲染（Viewer）──
+function startViewer() {
+    if (!bot) return;
+    try {
+        viewer = mineflayerViewer(bot, {
+            port: viewerPort,
+            firstPerson: true,
+            viewDistance: viewerViewDistance,
+        });
+        log('info', `画面渲染已启动，端口: ${viewerPort}, 视距: ${viewerViewDistance}`);
+        io.emit('viewer_status', { active: true, port: viewerPort });
+    } catch (err) {
+        log('warn', `画面渲染启动失败: ${err.message}`);
+    }
+}
+
+function closeViewer() {
+    if (viewer) {
+        try { viewer.close(); } catch (e) {}
+        viewer = null;
+        io.emit('viewer_status', { active: false });
+    }
+}
+
 // ═══════════════════════════════════
 //  SocketIO 事件处理
 // ═══════════════════════════════════
@@ -281,6 +318,7 @@ io.on('connection', (socket) => {
         shouldReconnect = false;
         isFlying = false;
         if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
+        closeViewer();
         if (bot) {
             try { bot.quit(); } catch (e) {}
             bot = null;
@@ -469,6 +507,7 @@ io.on('connection', (socket) => {
         isFlying = false;
         log('info', 'Web 客户端已断开，关闭 Bot');
         if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
+        closeViewer();
         if (bot) {
             try { bot.quit(); } catch (e) {}
             bot = null;

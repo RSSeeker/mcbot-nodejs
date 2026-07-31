@@ -9,5 +9,25 @@
         "password": "登录密码（无密码留空）"
     },
     "command_prefix": "**",
-    "track_players": ["玩家名1", "玩家名2"]
+    "track_players": ["玩家名1", "玩家名2"],
+    "viewer_port": 3000,
+    "viewer_view_distance": 10,
+    "keybindings": {
+        "forward": "w",
+        "left": "a",
+        "back": "s",
+        "right": "d",
+        "jump": " ",
+        "sneak": "shift",
+        "sprint": "control",
+        "drop": "q",
+        "interact": "e",
+        "attack": "f",
+        "pick_block": "b",
+        "fly": "v",
+        "rotate_left": "arrowleft",
+        "rotate_right": "arrowright",
+        "rotate_up": "arrowup",
+        "rotate_down": "arrowdown"
+    }
 }

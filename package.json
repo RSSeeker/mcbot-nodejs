@@ -20,10 +20,16 @@
   },
   "homepage": "https://github.com/RSSeeker/mcbot-python#readme",
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.3",
+    "buffer": "^6.0.3",
     "express": "^4.22.2",
     "mineflayer": "^4.37.1",
     "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-viewer": "^1.33.0",
+    "process": "^0.11.10",
     "socket.io": "^4.8.3",
-    "vec3": "^0.1.10"
+    "vec3": "^0.1.10",
+    "webpack": "^5.109.2",
+    "webpack-cli": "^5.1.4"
   }
 }
