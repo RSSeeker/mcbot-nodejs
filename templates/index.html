@@ -26,8 +26,10 @@
             font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
             background: var(--bg);
             color: var(--text);
-            min-height: 100vh;
-            overflow-x: hidden;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
         .header {
@@ -81,10 +83,20 @@
             grid-template-columns: 280px 1fr 280px;
             gap: 6px;
             padding: 6px;
-            height: calc(100vh - 62px);
+            flex: 1;
+            min-height: 0;
         }
         @media (max-width: 1200px) {
-            .main-layout { grid-template-columns: 1fr; height: auto; }
+            .main-layout { grid-template-columns: 1fr; overflow-y: auto; }
+            .content-area { overflow-y: auto; }
+        }
+
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
         }
 
         .panel {
@@ -95,6 +107,8 @@
             display: flex;
             flex-direction: column;
             gap: 6px;
+            overflow-y: auto;
+            min-height: 0;
         }
         .panel-title {
             font-size: 11px;
@@ -355,12 +369,13 @@
         .viewer-container {
             display: none;
             width: 100%;
-            height: 50vh;
+            flex: 1;
+            min-height: 0;
             border-top: 1px solid var(--border);
             background: #000;
             position: relative;
         }
-        .viewer-container.active { display: block; }
+        .viewer-container.active { display: flex; flex-direction: column; }
         .viewer-container iframe {
             width: 100%;
             height: 100%;
@@ -427,6 +442,7 @@
         <input type="text" id="cfgTrackPlayers" placeholder="玩家名,逗号分隔" style="background:#000;border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-size:11px;width:110px;">
     </div>
 
+    <div class="content-area">
     <div class="main-layout">
         <!-- 左侧面板: 状态 + 移动 + 物品 + 装备 -->
         <div class="panel">
@@ -637,8 +653,9 @@
         </div>
         <iframe id="viewerFrame" src="" style="display:none;" allow="cross-origin-isolated"></iframe>
     </div>
+</div>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io();
         let connected = false;
@@ -1041,7 +1058,6 @@
             const iframe = document.getElementById('viewerFrame');
             const placeholder = document.getElementById('viewerPlaceholder');
             const btn = document.getElementById('btnViewer');
-            const mainLayout = document.querySelector('.main-layout');
 
             viewerActive = !viewerActive;
 
@@ -1052,7 +1068,6 @@
                 placeholder.style.display = 'none';
                 iframe.style.display = '';
                 iframe.src = `http://localhost:${viewerPort}/`;
-                mainLayout.style.height = 'calc(50vh - 62px)';
             } else {
                 container.classList.remove('active');
                 btn.classList.remove('active');
@@ -1060,7 +1075,6 @@
                 placeholder.style.display = '';
                 iframe.style.display = 'none';
                 iframe.src = '';
-                mainLayout.style.height = 'calc(100vh - 62px)';
             }
         }
 
