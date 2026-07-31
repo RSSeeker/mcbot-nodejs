@@ -23,6 +23,7 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 
 - **Mineflayer 协议代理**：Node.js Mineflayer 处理所有 MC 协议细节，兼容多版本
 - **Web 控制台**：SocketIO 实时 Web 面板，可视化移动控制、视角转动、状态监控
+- **画面渲染**：集成 prismarine-viewer，在浏览器中实时渲染机器人第一人称视角画面
 - **聊天监听与命令响应**：监听公聊/私聊消息，响应 `command_prefix` 开头的玩家指令
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
 - **视角转动**：D-pad 方向键/键盘箭头增量旋转视角，支持绝对角度设置
@@ -36,13 +37,14 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 
 ```
 mcbot-web/
-├── server.js            # 主入口：Express + SocketIO + Mineflayer
-├── mineflayer_bot.js    # 备用：独立 Mineflayer 代理（Python IPC 模式）
+├── server.js              # 主入口：Express + SocketIO + Mineflayer + Viewer
+├── mineflayer_bot.js      # 备用：独立 Mineflayer 代理（Python IPC 模式）
 ├── templates/
-│   └── index.html       # Web 控制台前端页面
-├── config.json           # 配置文件（服务器/用户名/密码/指令前缀）
-├── config.example.json   # 配置文件模板
-├── package.json          # Node.js 依赖
+│   └── index.html         # Web 控制台前端页面
+├── config.json            # 配置文件（服务器/用户名/密码/指令前缀/画面/按键绑定）
+├── config.example.json    # 配置文件模板
+├── package.json           # Node.js 依赖
+├── _rebuild_viewer.js     # Webpack 构建脚本，重新构建 viewer 前端资源
 └── README.md
 ```
 
@@ -77,7 +79,27 @@ npm install
         "password": "登录密码（无密码留空）"
     },
     "command_prefix": "**",
-    "track_players": ["玩家名1", "玩家名2"]
+    "track_players": ["玩家名1", "玩家名2"],
+    "viewer_port": 3000,
+    "viewer_view_distance": 10,
+    "keybindings": {
+        "forward": "w",
+        "left": "a",
+        "back": "s",
+        "right": "d",
+        "jump": " ",
+        "sneak": "shift",
+        "sprint": "control",
+        "drop": "q",
+        "interact": "e",
+        "attack": "f",
+        "pick_block": "b",
+        "fly": "v",
+        "rotate_left": "arrowleft",
+        "rotate_right": "arrowright",
+        "rotate_up": "arrowup",
+        "rotate_down": "arrowdown"
+    }
 }
 ```
 
@@ -89,6 +111,10 @@ npm install
 | `bot.username` | Bot 用户名 |
 | `bot.password` | 登录密码（离线模式留空） |
 | `command_prefix` | 游戏内指令前缀，可改为 `!`、`/` 等 |
+| `track_players` | 追踪玩家列表，Bot 会跟随/响应这些玩家 |
+| `viewer_port` | 画面渲染 HTTP 端口，默认 3000 |
+| `viewer_view_distance` | 画面渲染区块视距，范围 2-20，默认 10 |
+| `keybindings` | Web 键盘绑定配置，值设为 `""` 可禁用该按键 |
 
 ### 启动
 
@@ -98,8 +124,9 @@ npm start
 
 启动后在浏览器打开 `http://localhost:5001`，可视控制面板功能包括：
 
-- **连接配置**：网页顶部填写服务器/用户名/密码等
-- **移动控制**：D-pad 方向键 + 跳跃/潜行/疾跑切换按钮，支持键盘 WASD/Q/E/F/Shift/Ctrl
+- **连接配置**：网页顶部填写服务器/用户名/密码/画面端口/视距/追踪玩家等
+- **画面渲染**：点击"画面"按钮在浏览器中实时渲染 Bot 第一人称视角，首次使用需构建 viewer 资源（`node _rebuild_viewer.js`）
+- **移动控制**：D-pad 方向键 + 跳跃/潜行/疾跑切换按钮，支持键盘快捷键（可在 config.json 中自定义按键绑定）
 - **视角转动**：独立的视角 D-pad，键盘方向键控制，支持 Yaw/Pitch 精确输入
 - **状态面板**：实时显示坐标、血量、饱食度、视角、手持物品、潜行/疾跑/爬行/骑乘状态
 - **物品栏**：快捷栏 1-9 点击切换，一键移入背包物品
@@ -148,6 +175,9 @@ npm start
 
 - [mineflayer](https://github.com/PrismarineJS/mineflayer) — Minecraft 协议客户端库
 - [mineflayer-pathfinder](https://github.com/PrismarineJS/mineflayer-pathfinder) — 寻路与移动插件
+- [prismarine-viewer](https://github.com/PrismarineJS/prismarine-viewer) — 基于 Three.js 的 Minecraft 世界渲染器
+- [@napi-rs/canvas](https://github.com/Brooooooklyn/canvas) — Rust 实现的 Canvas 库，为 viewer 提供渲染后端
+- [webpack](https://webpack.js.org/) — 模块打包工具，用于构建 viewer 前端资源
 - [express](https://expressjs.com/) — HTTP 服务器
 - [socket.io](https://socket.io/) — WebSocket 实时通信
 
