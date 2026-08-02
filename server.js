@@ -2,7 +2,7 @@
  * server.js — mcbot 纯 Node.js 网页控制台
  * ==========================================
  * Express + SocketIO + Mineflayer 一体化服务，
- * 无需 Python，启动后在浏览器访问 http://localhost:5000
+ * 无需 Python，启动后在浏览器访问 http://localhost:5001
  *
  * 启动方式:
  *   node server.js
@@ -27,6 +27,47 @@ const { AIController } = require('./ai_controller');
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 const CMD_PREFIX = config.command_prefix || '**';
+
+// ── 聊天日志记录器 ──
+const LOG_CHAT_ENABLED = config.log_chat_enabled !== false;
+const LOG_DIR = path.resolve(__dirname, config.log_dir || './logs');
+let logFilePath = null;
+let logStream = null;
+
+function initLogFile() {
+    if (!LOG_CHAT_ENABLED) return;
+    try {
+        if (!fs.existsSync(LOG_DIR)) {
+            fs.mkdirSync(LOG_DIR, { recursive: true });
+        }
+        const dateStr = new Date().toISOString().split('T')[0];
+        logFilePath = path.join(LOG_DIR, `chat_${dateStr}.log`);
+        logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+        writeLog('SYSTEM', '=== 日志记录已启动 ===');
+    } catch (e) {
+        console.error(`[日志] 初始化日志文件失败: ${e.message}`);
+    }
+}
+
+function writeLog(type, message) {
+    if (!LOG_CHAT_ENABLED || !logStream) return;
+    try {
+        const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        const line = `[${ts}] [${type}] ${message}\n`;
+        logStream.write(line);
+    } catch (e) {}
+}
+
+function closeLog() {
+    if (logStream) {
+        try {
+            writeLog('SYSTEM', '=== 日志记录已停止 ===');
+            logStream.end();
+        } catch (e) {}
+        logStream = null;
+        logFilePath = null;
+    }
+}
 
 // ── Ollama AI 客户端 ──
 const ollama = new OllamaClient(config.ollama || {});
@@ -179,12 +220,24 @@ function createBot(overrides = {}) {
     bot = mineflayer.createBot(botOpts);
     bot.loadPlugin(pathfinder);
 
+    let connectTimer = setTimeout(() => {
+        if (!currentStatus.connected) {
+            log('warn', `连接超时 (${botOpts.host}:${botOpts.port})，请检查服务器是否在线`);
+            io.emit('bot_event', { type: 'error', data: { message: `连接超时: ${botOpts.host}:${botOpts.port}` } });
+            try { bot.end(); } catch (e) {}
+        }
+    }, 15000);
+
+    initLogFile();
+
     currentStatus.username = botOpts.username;
     currentStatus.host = botOpts.host;
     currentStatus.port = botOpts.port;
 
     bot.on('login', () => {
+        clearTimeout(connectTimer);
         log('info', `已登录: ${botOpts.username}`);
+        writeLog('LOGIN', `Bot ${botOpts.username} 已登录服务器`);
         reconnectAttempts = 0;
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         io.emit('bot_event', { type: 'login', data: {} });
@@ -196,6 +249,7 @@ function createBot(overrides = {}) {
             if (text) {
                 chatLog.push({ sender: '[系统]', message: text, time: Date.now() / 1000 });
                 io.emit('chat_msg', { sender: '[系统]', message: text });
+                writeLog('SYSTEM', text);
                 processChatCommand(jsonMsg);
             }
         } catch (e) {}
@@ -206,25 +260,31 @@ function createBot(overrides = {}) {
         if (playerName === bot.username) return;
         chatLog.push({ sender: playerName, message, time: Date.now() / 1000 });
         io.emit('chat_msg', { sender: playerName, message });
+        writeLog('CHAT', `${playerName}: ${message}`);
         processChatCommand(message);
     });
 
     bot.on('playerJoined', (player) => {
         io.emit('bot_event', { type: 'player_joined', data: { username: player.username } });
+        writeLog('JOIN', `${player.username} 加入了游戏`);
     });
     bot.on('playerLeft', (player) => {
         io.emit('bot_event', { type: 'player_left', data: { username: player.username } });
+        writeLog('LEAVE', `${player.username} 离开了游戏`);
     });
 
     bot.on('kicked', (reason) => {
+        clearTimeout(connectTimer);
         const text = typeof reason === 'string' ? reason : JSON.stringify(reason);
         log('warn', `被踢: ${text}`);
+        writeLog('KICK', `Bot 被踢出: ${text}`);
         io.emit('bot_event', { type: 'kicked', data: { reason: text } });
         scheduleReconnect(5000);
     });
 
     bot.on('death', () => {
         log('info', 'Bot 已死亡，自动重生...');
+        writeLog('DEATH', 'Bot 已死亡，自动重生');
         io.emit('bot_event', { type: 'death', data: {} });
         setTimeout(() => {
             bot._client.write('client_command', { actionId: 0 });
@@ -233,22 +293,28 @@ function createBot(overrides = {}) {
     });
 
     bot.on('end', (reason) => {
+        clearTimeout(connectTimer);
         log('warn', `连接断开: ${reason}`);
+        writeLog('DISCONNECT', `连接断开: ${reason}`);
         io.emit('bot_event', { type: 'end', data: { reason } });
         currentStatus.connected = false;
         io.emit('status', currentStatus);
         if (aiController) aiController.stop();
         closeViewer();
+        closeLog();
         scheduleReconnect();
     });
 
     bot.on('error', (err) => {
+        clearTimeout(connectTimer);
         log('error', `错误: ${err.message}`);
+        writeLog('ERROR', `Bot 错误: ${err.message}`);
         io.emit('bot_event', { type: 'error', data: { message: err.message } });
     });
 
     bot.on('spawn', () => {
         log('info', 'Bot 已就绪');
+        writeLog('SPAWN', 'Bot 已出生并就绪');
         io.emit('bot_event', { type: 'spawn', data: {} });
         currentStatus.connected = true;
         io.emit('bot_connected', {
@@ -261,8 +327,10 @@ function createBot(overrides = {}) {
         movements = new Movements(bot);
         bot.pathfinder.setMovements(movements);
 
-        aiController.movements = movements;
-        aiController.GoalNear = require('mineflayer-pathfinder').goals.GoalNear;
+        if (aiController) {
+            aiController.movements = movements;
+            aiController.GoalNear = require('mineflayer-pathfinder').goals.GoalNear;
+        }
 
         startViewer();
 
@@ -339,42 +407,27 @@ function startStatusPolling() {
 function startViewer() {
     if (!bot) return;
 
-    const net = require('net');
-    const probe = net.createServer();
-    probe.once('error', () => {
-        probe.close();
-        log('warn', `画面渲染端口 ${viewerPort} 被占用，跳过启动`);
-    });
-    probe.once('listening', () => {
-        probe.close();
-        try {
-            viewer = mineflayerViewer(bot, {
-                port: viewerPort,
-                firstPerson: true,
-                viewDistance: viewerViewDistance,
-            });
-            viewer.on('error', (err) => {
-                log('warn', `画面渲染错误: ${err.message}`);
-                try { viewer.close(); } catch (e) {}
-                viewer = null;
-                io.emit('viewer_status', { active: false });
-            });
-            log('info', `画面渲染已启动，端口: ${viewerPort}, 视距: ${viewerViewDistance}`);
-            io.emit('viewer_status', { active: true, port: viewerPort });
-        } catch (err) {
-            log('warn', `画面渲染启动失败: ${err.message}`);
-        }
-    });
-    probe.listen(viewerPort);
+    try {
+        mineflayerViewer(bot, {
+            port: viewerPort,
+            firstPerson: true,
+            viewDistance: viewerViewDistance,
+        });
+        viewer = true;
+        log('info', `画面渲染已启动，端口: ${viewerPort}, 视距: ${viewerViewDistance}`);
+        io.emit('viewer_status', { active: true, port: viewerPort });
+    } catch (err) {
+        log('warn', `画面渲染启动失败: ${err.message}`);
+        io.emit('viewer_status', { active: false });
+    }
 }
 
 function closeViewer() {
-    if (viewer) {
-        const v = viewer;
+    if (viewer && bot && bot.viewer) {
         viewer = null;
         io.emit('viewer_status', { active: false });
         try {
-            v.close();
+            bot.viewer.close();
         } catch (e) {}
     }
 }
@@ -408,6 +461,7 @@ io.on('connection', (socket) => {
         isFlying = false;
         if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
         closeViewer();
+        closeLog();
         if (bot) {
             try { bot.quit(); } catch (e) {}
             bot = null;
@@ -431,12 +485,14 @@ io.on('connection', (socket) => {
         bot.chat(msg);
         chatLog.push({ sender: bot.username, message: msg, time: Date.now() / 1000 });
         io.emit('chat_msg', { sender: bot.username, message: msg });
+        writeLog('BOT_CHAT', `${bot.username}: ${msg}`);
     });
 
     socket.on('command', (data) => {
         const cmd = (data.command || '').trim();
         if (!cmd || !bot) return;
         bot.chat('/' + cmd);
+        writeLog('BOT_CMD', `/${cmd}`);
         addEvent('cmd', '/' + cmd);
     });
 
@@ -478,6 +534,7 @@ io.on('connection', (socket) => {
         if (!bot) return;
         const action = data.action;
         handleAction(action);
+        writeLog('ACTION', `Bot 执行动作: ${action}`);
         addEvent('action', action);
     });
 
@@ -543,9 +600,15 @@ io.on('connection', (socket) => {
         unequipItem(data.destination || 'hand');
     });
 
+    socket.on('unequipall', () => {
+        if (!bot) return;
+        unequipAll().then(r => socket.emit('chatmsg', { type: 'info', message: r.msg }));
+    });
+
     socket.on('whisper', (data) => {
         if (!bot) return;
         bot.chat(`/msg ${data.player} ${data.message}`);
+        writeLog('WHISPER', `→ ${data.player}: ${data.message}`);
     });
 
     socket.on('look_at', (data) => {
@@ -639,6 +702,7 @@ io.on('connection', (socket) => {
         log('info', 'Web 客户端已断开，关闭 Bot');
         if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
         closeViewer();
+        closeLog();
         if (bot) {
             try { bot.quit(); } catch (e) {}
             bot = null;
@@ -941,6 +1005,35 @@ async function unequipItem(destination) {
     }
 }
 
+async function unequipAll() {
+    const slots = ['head', 'torso', 'legs', 'feet', 'off-hand'];
+    const equipped = [];
+    for (const slot of slots) {
+        const item = bot.inventory.slots[bot.getEquipmentDestSlot(slot)];
+        if (item) equipped.push(slot);
+    }
+    if (equipped.length === 0) {
+        log('info', '没有可卸下的装备');
+        return { success: false, msg: '没有可卸下的装备' };
+    }
+    const emptySlots = bot.inventory.emptySlotCount();
+    if (emptySlots < equipped.length) {
+        log('warn', `背包空间不足 (需要${equipped.length}格, 空${emptySlots}格)`);
+        return { success: false, msg: `背包空间不足 (需要${equipped.length}格, 空${emptySlots}格)` };
+    }
+    let count = 0;
+    for (const slot of equipped) {
+        try {
+            await bot.unequip(slot);
+            count++;
+        } catch (err) {
+            log('warn', `卸下 ${slot} 失败: ${err.message}`);
+        }
+    }
+    log('info', `已卸下 ${count} 件装备`);
+    return { success: true, msg: `已卸下 ${count} 件装备` };
+}
+
 async function moveToHotbar() {
     const inventoryItems = bot.inventory.items();
     const hotbarSlots = [36, 37, 38, 39, 40, 41, 42, 43, 44];
@@ -1029,6 +1122,7 @@ function processChatCommand(rawContent) {
         const commandLine = chatMsg.substring(CMD_PREFIX.length).trim();
         if (commandLine) {
             log('info', `[命令] ${playerName}: ${commandLine}`);
+            writeLog('COMMAND', `${playerName}: ${CMD_PREFIX}${commandLine}`);
             executeCommand(commandLine, playerName);
         }
     } else if (chatMsg && playerName && !chatMsg.startsWith(CMD_PREFIX)) {
@@ -1045,6 +1139,7 @@ function executeCommand(line, playerName) {
         const MAX_LEN = 200;
         const clean = sanitizeChat(msg);
         if (!clean) return;
+        writeLog('CMD_REPLY', `→ ${playerName || '公聊'}: ${clean.substring(0, 200)}`);
         if (clean.includes(' | ')) {
             const items = clean.split(' | ');
             let current = '';
@@ -1095,12 +1190,13 @@ function executeCommand(line, playerName) {
                 '**drop - 丢出物品',
                 '**dropall - 丢出全部',
                 '**slot <1-9> - 切换格子',
-                '**look [yaw] [pitch] - 绝对视角',
+                '**look [yaw] [pitch] - 绝对视角，**look at <玩家名> - 看向玩家',
                 '**rotate <水平°> [垂直°] - 旋转视角',
                 '**cancel - 取消操作',
                 '**dismount - 下马',
                 '**equip <物品名> <槽位> - 装备',
-                '**unequip <槽位> - 卸下',
+                '**unequip <槽位> - 卸下装备',
+                '**unequipall - 卸下全部装备',
                 '**movetohotbar - 背包物品移入快捷栏',
                 '**pickblock - 选取准星方块',
                 '**fly [on/off] - 切换飞行模式',
@@ -1223,14 +1319,24 @@ function executeCommand(line, playerName) {
             }
             break;
         case 'look':
-            if (args.length >= 2) {
+            if (args.length >= 1 && args[0].toLowerCase() === 'at' && args.length >= 2) {
+                const lookTarget = bot.players[args[1]];
+                if (lookTarget && lookTarget.entity) {
+                    bot.lookAt(lookTarget.entity.position.offset(0, 1.6, 0));
+                    reply(`看向玩家 ${args[1]}`);
+                } else {
+                    reply(`找不到玩家: ${args[1]}`);
+                }
+            } else if (args.length >= 2 && !isNaN(parseFloat(args[0])) && !isNaN(parseFloat(args[1]))) {
                 const y = parseFloat(args[0]) * Math.PI / 180;
                 const p = parseFloat(args[1]) * Math.PI / 180;
                 bot.look(y, p, true);
                 reply(`视角: yaw=${args[0]} pitch=${args[1]}`);
-            } else if (args.length === 1) {
+            } else if (args.length === 1 && !isNaN(parseFloat(args[0]))) {
                 bot.look(parseFloat(args[0]) * Math.PI / 180, 0, true);
                 reply(`视角: yaw=${args[0]}`);
+            } else {
+                reply('用法: **look <yaw> [pitch] 或 **look at <玩家名>');
             }
             break;
         case 'rotate':
@@ -1265,6 +1371,9 @@ function executeCommand(line, playerName) {
                 unequipItem(args[0]);
                 reply(`卸下 ${args[0]}`);
             }
+            break;
+        case 'unequipall':
+            unequipAll().then(r => reply(r.msg));
             break;
         case 'movetohotbar':
             moveToHotbar();
@@ -1488,8 +1597,10 @@ async function handleAutoReply(message, playerName) {
         const aiReply = await ollama.chatWithHistory(playerName, message);
         if (aiReply) {
             sendSplitMessage(aiReply, playerName);
-            chatLog.push({ sender: bot.username, message: `[AI→${playerName}] ${sanitizeChat(aiReply).substring(0, 100)}`, time: Date.now() / 1000 });
-            io.emit('chat_msg', { sender: bot.username, message: `[AI→${playerName}] ${sanitizeChat(aiReply).substring(0, 100)}` });
+            const shortReply = sanitizeChat(aiReply).substring(0, 100);
+            chatLog.push({ sender: bot.username, message: `[AI→${playerName}] ${shortReply}`, time: Date.now() / 1000 });
+            io.emit('chat_msg', { sender: bot.username, message: `[AI→${playerName}] ${shortReply}` });
+            writeLog('AI_REPLY', `→ ${playerName}: ${shortReply}`);
         }
     } catch (err) {
         log('error', `AI 自动回复失败: ${err.message}`);

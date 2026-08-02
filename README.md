@@ -12,6 +12,8 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 │  - SocketIO 实时 WebSocket 通信               │
 │  - Mineflayer 协议代理（同一进程，无 IPC）      │
 │  - 聊天命令系统（**command）                   │
+│  - Ollama AI 集成（自动回复 + 自主控制）       │
+│  - 聊天日志记录                                │
 │  - 状态轮询 & 事件转发                         │
 │    │ TCP                                      │
 └────┼──────────────────────────────────────────┘
@@ -25,26 +27,31 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 - **Web 控制台**：SocketIO 实时 Web 面板，可视化移动控制、视角转动、状态监控
 - **画面渲染**：集成 prismarine-viewer，在浏览器中实时渲染机器人第一人称视角画面
 - **聊天监听与命令响应**：监听公聊/私聊消息，响应 `command_prefix` 开头的玩家指令
+- **Ollama AI 集成**：支持 AI 自动回复公聊/私聊、AI 自主控制 Bot 行为（Function Calling）
+- **聊天日志记录**：玩家聊天/系统消息/命令等写入日志文件，可通过 config 开关控制
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
-- **视角转动**：D-pad 方向键/键盘箭头增量旋转视角，支持绝对角度设置
+- **视角转动**：D-pad 方向键/键盘箭头增量旋转视角，支持绝对角度设置和看向玩家
 - **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/开箱/骑乘等）、使用物品、潜行、疾跑、丢物品、切格子
-- **背包管理**：背包物品移入快捷栏、装备/卸下物品
-- **实体交互**：骑乘、下马
+- **背包管理**：背包物品移入快捷栏、装备/卸下物品（支持一键卸下全部）
+- **实体交互**：骑乘、下马、飞行模式（创造/旁观）
 - **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品/潜行/疾跑/爬行/骑乘状态
-- **自动恢复**：死亡自动重生、断连自动重连（指数退避）、Web 面板一键重启
+- **自动恢复**：死亡自动重生、断连自动重连（指数退避）、连接超时检测（15s）、Web 面板一键重启
 
 ## 项目结构
 
 ```
 mcbot-web/
-├── server.js              # 主入口：Express + SocketIO + Mineflayer + Viewer
+├── server.js              # 主入口：Express + SocketIO + Mineflayer + Viewer + AI
+├── ai_controller.js       # AI 自主控制模块（Ollama Function Calling）
+├── ollama.js              # Ollama API 客户端（对话历史/自动回复/模型管理）
 ├── mineflayer_bot.js      # 备用：独立 Mineflayer 代理（Python IPC 模式）
 ├── templates/
 │   └── index.html         # Web 控制台前端页面
-├── config.json            # 配置文件（服务器/用户名/密码/指令前缀/画面/按键绑定）
+├── config.json            # 配置文件
 ├── config.example.json    # 配置文件模板
 ├── package.json           # Node.js 依赖
 ├── _rebuild_viewer.js     # Webpack 构建脚本，重新构建 viewer 前端资源
+├── logs/                  # 聊天日志目录（自动创建）
 └── README.md
 ```
 
@@ -54,12 +61,13 @@ mcbot-web/
 
 - Node.js 18+
 - 目标 Minecraft 服务器需启用离线模式（offline mode）
+- （可选）Ollama 本地运行，用于 AI 功能
 
 ### 安装
 
 ```bash
-git clone https://github.com/RSSeeker/mcbot-python.git
-cd mcbot-python
+git clone https://github.com/RSSeeker/mcbot-nodejs.git
+cd mcbot-nodejs
 npm install
 ```
 
@@ -82,6 +90,16 @@ npm install
     "track_players": ["玩家名1", "玩家名2"],
     "viewer_port": 3000,
     "viewer_view_distance": 10,
+    "log_chat_enabled": true,
+    "log_dir": "./logs",
+    "ai_enabled": true,
+    "ollama": {
+        "host": "http://localhost:11434",
+        "model": "qwen3:8b",
+        "system_prompt": "你是一个 Minecraft 游戏中的 AI 助手机器人。",
+        "timeout": 60000,
+        "max_history": 20
+    },
     "keybindings": {
         "forward": "w",
         "left": "a",
@@ -114,6 +132,14 @@ npm install
 | `track_players` | 追踪玩家列表，Bot 会跟随/响应这些玩家 |
 | `viewer_port` | 画面渲染 HTTP 端口，默认 3000 |
 | `viewer_view_distance` | 画面渲染区块视距，范围 2-20，默认 10 |
+| `log_chat_enabled` | 是否启用聊天日志记录，默认 true |
+| `log_dir` | 日志文件存放目录，默认 `./logs` |
+| `ai_enabled` | 是否启用 AI 功能，设为 false 可完全关闭 |
+| `ollama.host` | Ollama 服务地址 |
+| `ollama.model` | 使用的 AI 模型名称 |
+| `ollama.system_prompt` | AI 系统提示词 |
+| `ollama.timeout` | AI 请求超时（毫秒） |
+| `ollama.max_history` | 每个会话保留的对话历史条数 |
 | `keybindings` | Web 键盘绑定配置，值设为 `""` 可禁用该按键 |
 
 ### 启动
@@ -125,51 +151,115 @@ npm start
 启动后在浏览器打开 `http://localhost:5001`，可视控制面板功能包括：
 
 - **连接配置**：网页顶部填写服务器/用户名/密码/画面端口/视距/追踪玩家等
-- **画面渲染**：点击"画面"按钮在浏览器中实时渲染 Bot 第一人称视角，首次使用需构建 viewer 资源（`node _rebuild_viewer.js`）
+- **画面渲染**：点击"画面"按钮在浏览器中实时渲染 Bot 第一人称视角
 - **移动控制**：D-pad 方向键 + 跳跃/潜行/疾跑切换按钮，支持键盘快捷键（可在 config.json 中自定义按键绑定）
 - **视角转动**：独立的视角 D-pad，键盘方向键控制，支持 Yaw/Pitch 精确输入
 - **状态面板**：实时显示坐标、血量、饱食度、视角、手持物品、潜行/疾跑/爬行/骑乘状态
 - **物品栏**：快捷栏 1-9 点击切换，一键移入背包物品
-- **动作按钮**：攻击、挖掘、放置、交互、使用、下马、丢物品
+- **动作按钮**：攻击、挖掘、放置、交互、使用、长按使用、下马、丢物品、丢全部
 - **聊天面板**：实时公聊/私聊/系统消息，支持聊天输入和 Minecraft 指令执行
+- **AI 对话**：与 AI 模型对话，支持模型切换、历史清除
 - **寻路/跟随**：输入坐标或玩家名进行导航
-- **装备控制**：指定物品名装备到指定槽位，一键卸下
-- **重启**：Bot 连接后一键重启
+- **装备控制**：指定物品名装备到指定槽位，一键卸下全部
+- **重启**：Bot 连接后一键进程级重启
 
 ## 可用命令（游戏中）
+
+### 基础命令
 
 | 命令 | 说明 |
 |------|------|
 | `**help` | 列出所有可用命令 |
 | `**send <消息>` | 让 Bot 发送公聊消息 |
 | `**cmd <指令>` | 让 Bot 执行 Minecraft 指令 |
+| `**ping` | 延迟测试 |
+| `**restart` | 进程级重启 Bot |
+| `**respawn` | 重生 |
+
+### 移动与寻路
+
+| 命令 | 说明 |
+|------|------|
 | `**move <方向> [毫秒]` | 移动：forward/back/left/right，默认1000ms |
 | `**jump` | 跳跃 |
 | `**stop` | 停止所有移动 |
 | `**goto <x> <y> <z>` | 寻路到目标坐标 |
 | `**follow <玩家> [距离]` | 跟随指定玩家 |
-| `**look <偏航> [俯仰]` | 设置绝对视角角度 |
+| `**fly [on/off]` | 切换飞行模式（创造/旁观模式） |
+
+### 视角
+
+| 命令 | 说明 |
+|------|------|
+| `**look <yaw> [pitch]` | 设置绝对视角角度 |
+| `**look at <玩家名>` | 看向指定玩家 |
 | `**rotate <水平°> [垂直°]` | 旋转视角（增量角度，如 `**rotate 90 -30`） |
+
+### 动作
+
+| 命令 | 说明 |
+|------|------|
 | `**attack [时间]` | 攻击视线中的实体，时间参数指定长按毫秒数 |
 | `**dig [时间]` | 挖掘视线中的方块，时间参数指定长按毫秒数 |
 | `**place` | 放置方块（对准方块表面） |
 | `**interact` | 与方块/实体交互（开门/开箱/拉杆/村民交易/骑乘载具等） |
-| `**dismount` | 离开当前载具 |
-| `**use` | 使用手持物品 |
-| `**usehold [时间]` | 长按使用手持物品，默认2000ms |
+| `**use` | 使用手持物品（快速点击） |
+| `**usehold [时间]` | 长按使用手持物品（吃东西等），默认2000ms |
 | `**sneak` | 切换潜行状态（蹲下/起身） |
 | `**sprint` | 切换疾跑状态 |
 | `**drop` | 丢出手持物品 |
 | `**dropall` | 丢出全部物品 |
+| `**dismount` | 离开当前载具 |
+| `**cancel` | 取消所有操作 |
+
+### 背包与物品
+
+| 命令 | 说明 |
+|------|------|
 | `**slot <1-9>` | 切换到快捷栏第 N 格 |
 | `**equip <物品名> <槽位>` | 装备物品到指定槽位（hand/off-hand/head/torso/legs/feet） |
 | `**unequip <槽位>` | 卸下指定槽位的物品 |
+| `**unequipall` | 一键卸下全部装备（背包有空间时） |
 | `**movetohotbar` | 将背包物品移入快捷栏的空位 |
-| `**cancel` | 取消所有操作 |
-| `**respawn` | 重生 |
-| `**ping` | 延迟测试 |
+| `**pickblock` | 选取准星方块（创造模式直接拿，生存模式切背包） |
+
+### AI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `**ai <消息>` | 与 AI 对话 |
+| `**aimode [on/off]` | 切换 AI 自动回复公聊 |
+| `**aimodel [模型名]` | 切换/查看 AI 模型 |
+| `**aimodels` | 列出可用 AI 模型 |
+| `**aiclear` | 清除 AI 对话历史 |
+| `**aicontrol [on/off/status]` | AI 自主控制 Bot 行为 |
+| `**aidelay <毫秒>` | 设置 AI 自主控制间隔（1000-30000） |
 
 > 指令前缀通过 `config.json` 中的 `command_prefix` 修改。
+
+## 聊天日志
+
+启用 `log_chat_enabled` 后，日志文件按日期保存在 `log_dir` 目录下，格式为 `chat_YYYY-MM-DD.log`。
+
+日志记录的事件类型：
+
+| 类型 | 内容 |
+|------|------|
+| `SYSTEM` | 系统消息 |
+| `CHAT` | 玩家公聊 |
+| `JOIN` / `LEAVE` | 玩家进出 |
+| `LOGIN` / `SPAWN` | Bot 登录/出生 |
+| `KICK` / `DEATH` / `DISCONNECT` | Bot 状态变化 |
+| `ERROR` | Bot 错误 |
+| `BOT_CHAT` / `BOT_CMD` | 网页端发送的聊天/指令 |
+| `COMMAND` / `CMD_REPLY` | 玩家命令及回复 |
+| `AI_REPLY` | AI 自动回复 |
+| `WHISPER` | Bot 私聊 |
+| `ACTION` | Bot 执行的动作 |
+
+## 连接超时
+
+Bot 启动后 15 秒内未成功连接服务器，会自动断开并提示超时，避免进程卡死。
 
 ## 依赖
 
