@@ -20,16 +20,79 @@ const Movements = require('mineflayer-pathfinder').Movements;
 const { GoalBlock, GoalFollow } = require('mineflayer-pathfinder').goals;
 const { Vec3 } = require('vec3');
 const { mineflayer: mineflayerViewer } = require('prismarine-viewer');
+const { OllamaClient } = require('./ollama');
+const { AIController } = require('./ai_controller');
 
 // ── 加载配置 ──
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 const CMD_PREFIX = config.command_prefix || '**';
 
+// ── Ollama AI 客户端 ──
+const ollama = new OllamaClient(config.ollama || {});
+let ollamaAvailable = false;
+
+// ── AI 自主控制器（io 初始化后赋值）──
+let aiController;
+
+// ── 聊天内容安全过滤 ──
+function sanitizeChat(text) {
+    if (!text) return '';
+    let result = '';
+    for (const ch of text) {
+        const code = ch.codePointAt(0);
+        if (ch === '\u00a7') continue;
+        if (code === 0x2026) { result += '...'; continue; }
+        if (code === 0x2018 || code === 0x2019) { result += "'"; continue; }
+        if (code === 0x201c || code === 0x201d) { result += '"'; continue; }
+        if (code === 0x2013 || code === 0x2014) { result += '-'; continue; }
+        if (code === 0x00a0) { result += ' '; continue; }
+        if (code < 0x20 && code !== 0x0a) continue;
+        if (code >= 0x7f && code < 0xa0) continue;
+        if (code >= 0xd800 && code <= 0xdfff) continue;
+        if (code > 0x10ffff) continue;
+        result += ch;
+    }
+    return result.trim();
+}
+
+/**
+ * 发送拆分后的消息（用于 AI 自动回复等场景）
+ * @param {string} msg - 完整消息
+ * @param {string} targetPlayer - 私聊目标玩家名（空字符串则公聊）
+ * @param {number} maxLen - 每段最大长度
+ */
+function sendSplitMessage(msg, targetPlayer, maxLen = 200) {
+    if (!bot || !msg) return;
+    const clean = sanitizeChat(msg);
+    if (!clean) return;
+    for (let i = 0; i < clean.length; i += maxLen) {
+        const chunk = clean.substring(i, i + maxLen);
+        if (targetPlayer) {
+            bot.chat(`/msg ${targetPlayer} ${chunk}`);
+        } else {
+            bot.chat(chunk);
+        }
+    }
+}
+
 // ── Express + SocketIO ──
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
+
+// ── AI 自主控制器（仅当 config.ai_enabled 时初始化）──
+if (config.ai_enabled !== false) {
+    aiController = new AIController(
+        ollama,
+        () => bot,
+        (level, msg) => log(level, msg),
+        io
+    );
+} else {
+    aiController = null;
+    log('info', 'AI 功能已在配置中禁用');
+}
 
 app.use(express.static(path.join(__dirname, 'templates')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'templates', 'index.html')));
@@ -174,6 +237,7 @@ function createBot(overrides = {}) {
         io.emit('bot_event', { type: 'end', data: { reason } });
         currentStatus.connected = false;
         io.emit('status', currentStatus);
+        if (aiController) aiController.stop();
         closeViewer();
         scheduleReconnect();
     });
@@ -192,9 +256,13 @@ function createBot(overrides = {}) {
             host: botOpts.host,
             port: botOpts.port,
         });
+        io.emit('ai_status', { available: ollamaAvailable, model: ollama.model, config_enabled: config.ai_enabled !== false });
 
         movements = new Movements(bot);
         bot.pathfinder.setMovements(movements);
+
+        aiController.movements = movements;
+        aiController.GoalNear = require('mineflayer-pathfinder').goals.GoalNear;
 
         startViewer();
 
@@ -270,24 +338,44 @@ function startStatusPolling() {
 // ── 画面渲染（Viewer）──
 function startViewer() {
     if (!bot) return;
-    try {
-        viewer = mineflayerViewer(bot, {
-            port: viewerPort,
-            firstPerson: true,
-            viewDistance: viewerViewDistance,
-        });
-        log('info', `画面渲染已启动，端口: ${viewerPort}, 视距: ${viewerViewDistance}`);
-        io.emit('viewer_status', { active: true, port: viewerPort });
-    } catch (err) {
-        log('warn', `画面渲染启动失败: ${err.message}`);
-    }
+
+    const net = require('net');
+    const probe = net.createServer();
+    probe.once('error', () => {
+        probe.close();
+        log('warn', `画面渲染端口 ${viewerPort} 被占用，跳过启动`);
+    });
+    probe.once('listening', () => {
+        probe.close();
+        try {
+            viewer = mineflayerViewer(bot, {
+                port: viewerPort,
+                firstPerson: true,
+                viewDistance: viewerViewDistance,
+            });
+            viewer.on('error', (err) => {
+                log('warn', `画面渲染错误: ${err.message}`);
+                try { viewer.close(); } catch (e) {}
+                viewer = null;
+                io.emit('viewer_status', { active: false });
+            });
+            log('info', `画面渲染已启动，端口: ${viewerPort}, 视距: ${viewerViewDistance}`);
+            io.emit('viewer_status', { active: true, port: viewerPort });
+        } catch (err) {
+            log('warn', `画面渲染启动失败: ${err.message}`);
+        }
+    });
+    probe.listen(viewerPort);
 }
 
 function closeViewer() {
     if (viewer) {
-        try { viewer.close(); } catch (e) {}
+        const v = viewer;
         viewer = null;
         io.emit('viewer_status', { active: false });
+        try {
+            v.close();
+        } catch (e) {}
     }
 }
 
@@ -299,6 +387,7 @@ io.on('connection', (socket) => {
     log('info', 'Web 客户端已连接');
     socket.emit('status', currentStatus);
     socket.emit('chat_history', chatLog.slice(-50));
+    socket.emit('ai_status', { available: ollamaAvailable, model: ollama.model, config_enabled: config.ai_enabled !== false });
 
     socket.on('connect_bot', (data = {}) => {
         if (bot && currentStatus.connected) {
@@ -326,6 +415,7 @@ io.on('connection', (socket) => {
         currentStatus.connected = false;
         io.emit('status', currentStatus);
         io.emit('bot_disconnected');
+        if (aiController) aiController.stop();
         addEvent('info', 'Bot 已断开');
     });
 
@@ -500,6 +590,47 @@ io.on('connection', (socket) => {
         if (bot && currentStatus.connected) {
             socket.emit('status', currentStatus);
         }
+    });
+
+    socket.on('ai_chat', async (data) => {
+        if (config.ai_enabled === false) {
+            socket.emit('ai_reply', { message: 'AI 功能已在配置中禁用', model: '' });
+            return;
+        }
+        if (!ollamaAvailable) {
+            socket.emit('ai_reply', { message: 'AI 服务未连接，请确保 Ollama 已启动', model: '' });
+            return;
+        }
+        const message = (data.message || '').trim();
+        if (!message) return;
+        socket.emit('ai_typing', true);
+        try {
+            const reply = await ollama.chatWithHistory('web', message);
+            socket.emit('ai_reply', { message: sanitizeChat(reply), model: ollama.model });
+        } catch (err) {
+            socket.emit('ai_reply', { message: `AI 请求失败: ${err.message}`, model: ollama.model });
+        }
+        socket.emit('ai_typing', false);
+    });
+
+    socket.on('ai_set_mode', (data) => {
+        const enabled = data.enabled === true || data.enabled === 'true' || data.enabled === 'on';
+        ollama.setAutoReply(enabled);
+        socket.emit('ai_mode_changed', { enabled: ollama.autoReplyEnabled });
+    });
+
+    socket.on('ai_get_models', async () => {
+        try {
+            const models = await ollama.listModels();
+            socket.emit('ai_models', models);
+        } catch (err) {
+            socket.emit('ai_models', []);
+        }
+    });
+
+    socket.on('ai_clear', () => {
+        ollama.clearAllHistory();
+        socket.emit('ai_cleared', {});
     });
 
     socket.on('disconnect', () => {
@@ -900,6 +1031,8 @@ function processChatCommand(rawContent) {
             log('info', `[命令] ${playerName}: ${commandLine}`);
             executeCommand(commandLine, playerName);
         }
+    } else if (chatMsg && playerName && !chatMsg.startsWith(CMD_PREFIX)) {
+        handleAutoReply(chatMsg, playerName);
     }
 }
 
@@ -910,8 +1043,10 @@ function executeCommand(line, playerName) {
 
     function reply(msg) {
         const MAX_LEN = 200;
-        if (msg.includes(' | ')) {
-            const items = msg.split(' | ');
+        const clean = sanitizeChat(msg);
+        if (!clean) return;
+        if (clean.includes(' | ')) {
+            const items = clean.split(' | ');
             let current = '';
             for (const item of items) {
                 if (current && (current.length + item.length + 3) > MAX_LEN) {
@@ -923,8 +1058,8 @@ function executeCommand(line, playerName) {
             }
             if (current) sendChunk(current);
         } else {
-            for (let i = 0; i < msg.length; i += MAX_LEN) {
-                sendChunk(msg.substring(i, i + MAX_LEN));
+            for (let i = 0; i < clean.length; i += MAX_LEN) {
+                sendChunk(clean.substring(i, i + MAX_LEN));
             }
         }
 
@@ -972,6 +1107,17 @@ function executeCommand(line, playerName) {
                 '**ping - 延迟测试',
                 '**restart - 进程级重启',
             ];
+            if (config.ai_enabled !== false) {
+                helpList.push(
+                    '**ai <消息> - 与AI对话',
+                    '**aimode [on/off] - 切换AI自动回复',
+                    '**aimodel [模型名] - 切换/查看AI模型',
+                    '**aimodels - 列出可用AI模型',
+                    '**aiclear - 清除AI对话历史',
+                    '**aicontrol [on/off/status] - AI自主控制',
+                    '**aidelay <毫秒> - 设置AI控制间隔'
+                );
+            }
             reply(helpList.join(' | '));
             break;
         case 'send':
@@ -1151,9 +1297,202 @@ function executeCommand(line, playerName) {
                 reply(`Pong! ${ping}ms`);
             });
             break;
+        case 'ai':
+            if (config.ai_enabled === false) {
+                reply('AI 功能已在配置中禁用');
+                break;
+            }
+            if (!ollamaAvailable) {
+                reply('AI 服务未连接，请确保 Ollama 已启动');
+                break;
+            }
+            if (args.length === 0) {
+                reply('用法: **ai <消息>');
+                break;
+            }
+            handleAiChat(args.join(' '), playerName, reply);
+            break;
+        case 'aimode':
+            if (config.ai_enabled === false) {
+                reply('AI 功能已在配置中禁用');
+                break;
+            }
+            if (!ollamaAvailable) {
+                reply('AI 服务未连接，请确保 Ollama 已启动');
+                break;
+            }
+            if (args.length > 0) {
+                const mode = args[0].toLowerCase();
+                if (mode === 'on' || mode === '1' || mode === 'true') {
+                    ollama.setAutoReply(true);
+                    reply('AI 自动回复已开启');
+                } else if (mode === 'off' || mode === '0' || mode === 'false') {
+                    ollama.setAutoReply(false);
+                    reply('AI 自动回复已关闭');
+                } else {
+                    reply('用法: **aimode on/off');
+                }
+            } else {
+                ollama.setAutoReply(!ollama.autoReplyEnabled);
+                reply(ollama.autoReplyEnabled ? 'AI 自动回复已开启' : 'AI 自动回复已关闭');
+            }
+            break;
+        case 'aimodel':
+            if (config.ai_enabled === false) {
+                reply('AI 功能已在配置中禁用');
+                break;
+            }
+            if (!ollamaAvailable) {
+                reply('AI 服务未连接，请确保 Ollama 已启动');
+                break;
+            }
+            if (args.length > 0) {
+                ollama.model = args[0];
+                reply(`AI 模型已切换为: ${args[0]}`);
+            } else {
+                reply(`当前 AI 模型: ${ollama.model}`);
+            }
+            break;
+        case 'aimodels':
+            if (config.ai_enabled === false) {
+                reply('AI 功能已在配置中禁用');
+                break;
+            }
+            handleListModels(reply);
+            break;
+        case 'aiclear':
+            if (config.ai_enabled === false) {
+                reply('AI 功能已在配置中禁用');
+                break;
+            }
+            ollama.clearAllHistory();
+            reply('AI 对话历史已清除');
+            break;
+        case 'aicontrol':
+            if (config.ai_enabled === false) {
+                reply('AI 功能已在配置中禁用');
+                break;
+            }
+            if (!ollamaAvailable) {
+                reply('AI 服务未连接，请确保 Ollama 已启动');
+                break;
+            }
+            if (!aiController) {
+                reply('AI 控制器未初始化');
+                break;
+            }
+            if (args.length > 0) {
+                const ctrlMode = args[0].toLowerCase();
+                if (ctrlMode === 'on' || ctrlMode === '1' || ctrlMode === 'true') {
+                    aiController.start();
+                    reply('AI 自主控制已开启');
+                } else if (ctrlMode === 'off' || ctrlMode === '0' || ctrlMode === 'false') {
+                    aiController.stop();
+                    reply('AI 自主控制已停止');
+                } else if (ctrlMode === 'status') {
+                    reply(`AI 自主控制: ${aiController.enabled ? '运行中' : '已停止'} | 间隔: ${aiController.loopDelay}ms`);
+                } else {
+                    reply('用法: **aicontrol on/off/status');
+                }
+            } else {
+                if (aiController.enabled) {
+                    aiController.stop();
+                    reply('AI 自主控制已停止');
+                } else {
+                    aiController.start();
+                    reply('AI 自主控制已开启');
+                }
+            }
+            break;
+        case 'aidelay':
+            if (config.ai_enabled === false) {
+                reply('AI 功能已在配置中禁用');
+                break;
+            }
+            if (!ollamaAvailable) {
+                reply('AI 服务未连接，请确保 Ollama 已启动');
+                break;
+            }
+            if (args.length > 0) {
+                const delay = parseInt(args[0]);
+                if (isNaN(delay) || delay < 1000 || delay > 30000) {
+                    reply('间隔范围: 1000-30000 毫秒');
+                } else {
+                    aiController.setDelay(delay);
+                    reply(`AI 控制间隔已设为 ${delay}ms`);
+                }
+            } else {
+                reply(`当前 AI 控制间隔: ${aiController.loopDelay}ms`);
+            }
+            break;
         default:
             log('info', `未知命令: ${cmd}`);
             reply(`未知命令: ${cmd}，输入 **help 查看可用命令`);
+    }
+}
+
+// ═══════════════════════════════════
+//  AI 功能
+// ═══════════════════════════════════
+
+async function handleAiChat(message, playerName, replyFn) {
+    if (!ollamaAvailable) {
+        replyFn('AI 服务未连接，请确保 Ollama 已启动');
+        return;
+    }
+    try {
+        replyFn('AI思考中...');
+        const sessionId = playerName || 'global';
+        const aiReply = await ollama.chatWithHistory(sessionId, message);
+        if (aiReply) {
+            replyFn(sanitizeChat(aiReply));
+        } else {
+            replyFn('AI 未返回有效回复');
+        }
+    } catch (err) {
+        log('error', `AI 请求失败: ${err.message}`);
+        replyFn(`AI 请求失败: ${err.message}`);
+    }
+}
+
+async function handleListModels(replyFn) {
+    if (!ollamaAvailable) {
+        replyFn('AI 服务未连接，请确保 Ollama 已启动');
+        return;
+    }
+    try {
+        const models = await ollama.listModels();
+        if (models.length === 0) {
+            replyFn('未找到可用模型，请确保 Ollama 已启动并拉取了模型');
+            return;
+        }
+        const modelList = models.map(m => m.name).join(' | ');
+        replyFn(`可用模型: ${modelList}`);
+    } catch (err) {
+        log('error', `获取模型列表失败: ${err.message}`);
+        replyFn(`获取模型列表失败: ${err.message}，请确保 Ollama 服务已启动`);
+    }
+}
+
+/**
+ * 处理 AI 自动回复，在收到聊天消息时调用
+ * @param {string} message - 聊天消息内容
+ * @param {string} playerName - 发送者名称
+ */
+async function handleAutoReply(message, playerName) {
+    if (!ollamaAvailable) return;
+    if (!ollama.shouldAutoReply(playerName)) return;
+    if (!bot) return;
+
+    try {
+        const aiReply = await ollama.chatWithHistory(playerName, message);
+        if (aiReply) {
+            sendSplitMessage(aiReply, playerName);
+            chatLog.push({ sender: bot.username, message: `[AI→${playerName}] ${sanitizeChat(aiReply).substring(0, 100)}`, time: Date.now() / 1000 });
+            io.emit('chat_msg', { sender: bot.username, message: `[AI→${playerName}] ${sanitizeChat(aiReply).substring(0, 100)}` });
+        }
+    } catch (err) {
+        log('error', `AI 自动回复失败: ${err.message}`);
     }
 }
 
@@ -1169,4 +1508,25 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('='.repeat(50));
     console.log('自动连接 Bot...');
     createBot();
+
+    // 检查 Ollama 服务状态（仅当 AI 功能启用时）
+    if (config.ai_enabled !== false) {
+        ollama.checkHealth().then(available => {
+            ollamaAvailable = available;
+            if (available) {
+                console.log('[Ollama] AI 服务已连接');
+                ollama.listModels().then(models => {
+                    const names = models.map(m => m.name).join(', ');
+                    console.log(`[Ollama] 可用模型: ${names || '无'}`);
+                }).catch(() => {});
+            } else {
+                console.log('[Ollama] AI 服务未连接，AI 功能已禁用');
+            }
+        }).catch(() => {
+            ollamaAvailable = false;
+            console.log('[Ollama] AI 服务检测失败，AI 功能已禁用');
+        });
+    } else {
+        console.log('[AI] 已在配置中禁用，跳过初始化');
+    }
 });

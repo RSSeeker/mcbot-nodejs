@@ -12,6 +12,14 @@
     "track_players": ["玩家名1", "玩家名2"],
     "viewer_port": 3000,
     "viewer_view_distance": 10,
+    "ai_enabled": true,
+    "ollama": {
+        "host": "http://localhost:11434",
+        "model": "qwen2.5:latest",
+        "system_prompt": "你是一个 Minecraft 游戏中的 AI 助手机器人。请用简洁、友好的中文回复。回复尽量简短，控制在游戏聊天栏的长度限制内。",
+        "timeout": 60000,
+        "max_history": 20
+    },
     "keybindings": {
         "forward": "w",
         "left": "a",

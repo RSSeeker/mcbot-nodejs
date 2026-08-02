@@ -402,6 +402,85 @@
             border-color: var(--accent);
             color: #fff;
         }
+
+        .ai-chat-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .ai-messages {
+            background: #000;
+            border-radius: 6px;
+            padding: 6px;
+            font-size: 12px;
+            max-height: 150px;
+            min-height: 60px;
+            overflow-y: auto;
+        }
+        .ai-msg {
+            padding: 4px 6px;
+            margin: 2px 0;
+            border-radius: 6px;
+            word-break: break-all;
+            line-height: 1.4;
+        }
+        .ai-msg.user {
+            background: rgba(0,210,255,0.1);
+            border-left: 2px solid var(--accent2);
+        }
+        .ai-msg.assistant {
+            background: rgba(233,69,96,0.08);
+            border-left: 2px solid var(--accent);
+        }
+        .ai-msg.system {
+            background: rgba(255,255,255,0.03);
+            border-left: 2px solid var(--text-dim);
+            color: var(--text-dim);
+            font-style: italic;
+        }
+        .ai-msg .ai-role {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+        .ai-msg.user .ai-role { color: var(--accent2); }
+        .ai-msg.assistant .ai-role { color: var(--accent); }
+        .ai-msg .ai-text {
+            font-size: 12px;
+        }
+        .ai-typing {
+            font-size: 10px;
+            color: var(--text-dim);
+            padding: 4px 6px;
+            display: none;
+            animation: pulse 1.2s infinite;
+        }
+        @keyframes pulse {
+            0%,100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        .ai-input-area {
+            display: flex;
+            gap: 4px;
+        }
+        .ai-input-area input {
+            flex: 1;
+            background: #000;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 5px 6px;
+            border-radius: 6px;
+            font-size: 11px;
+        }
+        .ai-input-area input::placeholder { color: var(--text-dim); }
+        .ai-status {
+            font-size: 9px;
+            color: var(--text-dim);
+            text-align: center;
+        }
+        .ai-status.online { color: var(--success); }
+        .ai-status.offline { color: var(--danger); }
     </style>
 </head>
 <body>
@@ -641,6 +720,23 @@
             <div class="panel-title">📋 事件日志</div>
             <div class="log-panel" id="logPanel">
                 <div class="log-entry info">等待连接...</div>
+            </div>
+
+            <div class="panel-title">🤖 AI 对话</div>
+            <div class="ai-chat-panel">
+                <div class="ai-status offline" id="aiStatus">⚫ AI 未连接</div>
+                <div class="ai-messages" id="aiMessages">
+                    <div class="ai-msg system">
+                        <div class="ai-text">连接 Bot 后可使用 AI 对话</div>
+                    </div>
+                </div>
+                <div class="ai-typing" id="aiTyping">AI 思考中...</div>
+                <div class="ai-input-area">
+                    <input type="text" id="aiInput" placeholder="输入消息与AI对话..."
+                        onkeydown="if(event.key==='Enter')sendAiChat()">
+                    <button class="btn btn-accent" onclick="sendAiChat()" style="padding:4px 8px;font-size:10px;">发送</button>
+                    <button class="btn" onclick="clearAiChat()" style="padding:4px 6px;font-size:10px;" title="清除对话">🗑</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1209,6 +1305,81 @@
                 }
             })
             .catch(() => {});
+
+        let aiOnline = false;
+
+        function sendAiChat() {
+            const input = document.getElementById('aiInput');
+            const msg = input.value.trim();
+            if (!msg) return;
+            addAiMsg('user', msg);
+            socket.emit('ai_chat', { message: msg });
+            input.value = '';
+        }
+
+        function clearAiChat() {
+            document.getElementById('aiMessages').innerHTML = '';
+            socket.emit('ai_clear');
+        }
+
+        function addAiMsg(role, text) {
+            const container = document.getElementById('aiMessages');
+            const placeholder = container.querySelector('.ai-msg.system');
+            if (placeholder) placeholder.remove();
+            const div = document.createElement('div');
+            div.className = `ai-msg ${role}`;
+            const roleLabel = role === 'user' ? 'YOU' : 'AI';
+            div.innerHTML = `<div class="ai-role">${roleLabel}</div><div class="ai-text">${escHtml(text)}</div>`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        socket.on('ai_reply', (data) => {
+            addAiMsg('assistant', data.message);
+        });
+
+        socket.on('ai_typing', (show) => {
+            document.getElementById('aiTyping').style.display = show ? 'block' : 'none';
+        });
+
+        socket.on('ai_cleared', () => {
+            const container = document.getElementById('aiMessages');
+            container.innerHTML = '<div class="ai-msg system"><div class="ai-text">对话已清除</div></div>';
+        });
+
+        socket.on('ai_status', (data) => {
+            if (data.config_enabled === false) {
+                document.getElementById('aiStatus').textContent = '⛔ AI 已禁用（配置）';
+                document.getElementById('aiStatus').className = 'ai-status offline';
+                aiOnline = false;
+                document.getElementById('aiInput').disabled = true;
+                document.getElementById('aiInput').placeholder = 'AI 功能已在配置中禁用';
+            } else if (data.available) {
+                document.getElementById('aiStatus').textContent = `🟢 AI 就绪 (${data.model || ''})`;
+                document.getElementById('aiStatus').className = 'ai-status online';
+                aiOnline = true;
+                document.getElementById('aiInput').disabled = false;
+                document.getElementById('aiInput').placeholder = '输入消息与AI对话...';
+            } else {
+                document.getElementById('aiStatus').textContent = '⚫ AI 未连接';
+                document.getElementById('aiStatus').className = 'ai-status offline';
+                aiOnline = false;
+                document.getElementById('aiInput').disabled = false;
+                document.getElementById('aiInput').placeholder = 'AI 未连接，输入消息与AI对话...';
+            }
+        });
+
+        socket.on('bot_connected', () => {
+            document.getElementById('aiStatus').textContent = '🟢 AI 就绪';
+            document.getElementById('aiStatus').className = 'ai-status online';
+            aiOnline = true;
+        });
+
+        socket.on('bot_disconnected', () => {
+            document.getElementById('aiStatus').textContent = '⚫ AI 未连接';
+            document.getElementById('aiStatus').className = 'ai-status offline';
+            aiOnline = false;
+        });
     </script>
 </body>
 </html>
