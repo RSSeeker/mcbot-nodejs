@@ -1463,6 +1463,37 @@ function executeCommand(line, playerName) {
             pickBlock();
             reply('选取方块');
             break;
+        case 'give':
+            if (args.length === 0) {
+                reply('用法: **give <物品名> [数量]');
+                break;
+            }
+            if (bot.game && bot.game.gameMode !== 'creative') {
+                reply('仅创造模式可用');
+                break;
+            }
+            {
+                const itemName = args[0].toLowerCase();
+                const count = args.length > 1 ? Math.max(1, Math.min(64, parseInt(args[1]) || 1)) : 1;
+                let item = bot.registry.itemsByName[itemName];
+                if (!item) {
+                    const shortName = itemName.replace(/^minecraft:/, '');
+                    item = bot.registry.itemsByName[shortName];
+                }
+                if (!item) {
+                    reply(`未知物品: ${itemName}`);
+                    break;
+                }
+                try {
+                    const Item = require('prismarine-item')(bot.registry);
+                    const hotbarSlot = 36 + bot.quickBarSlot;
+                    bot.creative.setInventorySlot(hotbarSlot, new Item(item.id, count));
+                    reply(`已获取: ${item.displayName || item.name}${count > 1 ? ` x${count}` : ''}`);
+                } catch (err) {
+                    reply(`获取失败: ${err.message}`);
+                }
+            }
+            break;
         case 'fly':
             if (args.length > 0) {
                 const flyState = args[0].toLowerCase();
