@@ -1270,7 +1270,8 @@ function executeCommand(line, playerName) {
                 '**movetohotbar - 背包物品移入快捷栏',
                 '**pickblock - 选取准星方块',
                 '**fly [on/off] - 切换飞行模式',
-                '**ping - 延迟测试',
+                '**give <物品名> [数量] - 创造模式获取物品',
+                '**ping [地址] - 延迟测试/服务器信息',
                 '**restart - 进程级重启',
             ];
             if (config.ai_enabled !== false) {
@@ -1287,10 +1288,18 @@ function executeCommand(line, playerName) {
             reply(helpList.join(' | '));
             break;
         case 'send':
-            if (args.length > 0) bot.chat(args.join(' '));
+            if (args.length === 0) {
+                reply('用法: **send <消息>');
+                break;
+            }
+            bot.chat(args.join(' '));
             break;
         case 'cmd':
-            if (args.length > 0) bot.chat('/' + args.join(' '));
+            if (args.length === 0) {
+                reply('用法: **cmd <MC指令>');
+                break;
+            }
+            bot.chat('/' + args.join(' '));
             break;
         case 'restart':
             reply('正在进程级重启...');
@@ -1301,9 +1310,22 @@ function executeCommand(line, playerName) {
             reply('已发送重生请求');
             break;
         case 'move':
-            if (args.length > 0) {
-                const dir = args[0];
+            if (args.length === 0) {
+                reply('用法: **move <方向> [时间ms]  方向: forward/back/left/right');
+                break;
+            }
+            {
+                const dirs = ['forward', 'back', 'left', 'right'];
+                const dir = args[0].toLowerCase();
+                if (!dirs.includes(dir)) {
+                    reply(`无效方向: ${args[0]}, 可选: forward/back/left/right`);
+                    break;
+                }
                 const dur = args.length > 1 ? parseInt(args[1]) : 1000;
+                if (isNaN(dur) || dur < 0) {
+                    reply('时间必须大于等于0 (ms)');
+                    break;
+                }
                 startMove(dir, dur);
                 reply(`移动: ${dir} ${dur}ms`);
             }
@@ -1318,36 +1340,68 @@ function executeCommand(line, playerName) {
             reply('已停止');
             break;
         case 'goto':
-            if (args.length >= 3) {
+            if (args.length < 3) {
+                reply('用法: **goto <x> <y> <z>');
+                break;
+            }
+            {
+                const x = parseInt(args[0]), y = parseInt(args[1]), z = parseInt(args[2]);
+                if (isNaN(x) || isNaN(y) || isNaN(z)) {
+                    reply('坐标必须为整数');
+                    break;
+                }
                 if (!movements) break;
                 stopMove();
                 bot.pathfinder.setMovements(movements);
-                bot.pathfinder.goto(new GoalBlock(parseInt(args[0]), parseInt(args[1]), parseInt(args[2])))
+                bot.pathfinder.goto(new GoalBlock(x, y, z))
                     .then(() => { log('info', '到达目标'); reply('到达目标'); })
                     .catch(err => { log('warn', `寻路失败: ${err.message}`); reply(`寻路失败: ${err.message}`); });
             }
             break;
         case 'follow':
-            if (args.length > 0) {
+            if (args.length === 0) {
+                reply('用法: **follow <玩家名> [距离]');
+                break;
+            }
+            {
                 if (!movements) break;
                 const target = bot.players[args[0]];
                 if (!target || !target.entity) { reply(`找不到玩家: ${args[0]}`); break; }
+                const dist = args.length > 1 ? parseFloat(args[1]) : 2;
+                if (args.length > 1 && (isNaN(dist) || dist < 0)) {
+                    reply('距离必须大于等于0');
+                    break;
+                }
                 stopMove();
                 bot.pathfinder.setMovements(movements);
-                bot.pathfinder.goto(new GoalFollow(target.entity, args.length > 1 ? parseFloat(args[1]) : 2))
+                bot.pathfinder.goto(new GoalFollow(target.entity, dist))
                     .then(() => { log('info', '到达目标附近'); reply('到达目标附近'); })
                     .catch(err => { log('warn', `跟随失败: ${err.message}`); reply(`跟随失败: ${err.message}`); });
             }
             break;
         case 'attack':
-            handleAction(args.length > 0 ? 'attack_hold' : 'attack');
-            if (args.length > 0) setTimeout(() => { if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; } }, parseInt(args[0]));
-            reply('攻击');
+            {
+                const dur = args.length > 0 ? parseInt(args[0]) : 0;
+                if (args.length > 0 && (isNaN(dur) || dur <= 0)) {
+                    reply('用法: **attack [持续ms]  时间必须大于0');
+                    break;
+                }
+                handleAction(dur > 0 ? 'attack_hold' : 'attack');
+                if (dur > 0) setTimeout(() => { if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; } }, dur);
+                reply(dur > 0 ? `持续攻击 ${dur}ms` : '攻击');
+            }
             break;
         case 'dig':
-            handleAction(args.length > 0 ? 'dig_hold' : 'dig');
-            if (args.length > 0) setTimeout(() => { if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; } }, parseInt(args[0]));
-            reply('挖掘');
+            {
+                const dur = args.length > 0 ? parseInt(args[0]) : 0;
+                if (args.length > 0 && (isNaN(dur) || dur <= 0)) {
+                    reply('用法: **dig [持续ms]  时间必须大于0');
+                    break;
+                }
+                handleAction(dur > 0 ? 'dig_hold' : 'dig');
+                if (dur > 0) setTimeout(() => { if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; } }, dur);
+                reply(dur > 0 ? `持续挖掘 ${dur}ms` : '挖掘');
+            }
             break;
         case 'place':
             handleAction('place');
@@ -1362,9 +1416,16 @@ function executeCommand(line, playerName) {
             reply('使用物品');
             break;
         case 'usehold':
-            handleAction('use_item_hold');
-            if (args.length > 0) setTimeout(() => { if (isRightClickHolding) { bot.deactivateItem(); isRightClickHolding = false; } }, parseInt(args[0]));
-            reply(args.length > 0 ? `长按使用 ${args[0]}ms` : '长按使用');
+            {
+                const dur = args.length > 0 ? parseInt(args[0]) : 0;
+                if (args.length > 0 && (isNaN(dur) || dur <= 0)) {
+                    reply('用法: **usehold [持续ms]  时间必须大于0');
+                    break;
+                }
+                handleAction('use_item_hold');
+                if (dur > 0) setTimeout(() => { if (isRightClickHolding) { bot.deactivateItem(); isRightClickHolding = false; } }, dur);
+                reply(dur > 0 ? `长按使用 ${dur}ms` : '长按使用');
+            }
             break;
         case 'sneak':
             const sneakState = !bot.getControlState('sneak');
@@ -1389,9 +1450,18 @@ function executeCommand(line, playerName) {
             reply('丢出全部');
             break;
         case 'slot':
-            if (args.length > 0) {
+            if (args.length === 0) {
+                reply('用法: **slot <1-9>');
+                break;
+            }
+            {
                 const s = parseInt(args[0]) - 1;
-                if (s >= 0 && s <= 8) { bot.setQuickBarSlot(s); reply(`切换到第 ${args[0]} 格`); }
+                if (isNaN(s) || s < 0 || s > 8) {
+                    reply('格子在1-9之间');
+                    break;
+                }
+                bot.setQuickBarSlot(s);
+                reply(`切换到第 ${args[0]} 格`);
             }
             break;
         case 'look':
@@ -1416,7 +1486,11 @@ function executeCommand(line, playerName) {
             }
             break;
         case 'rotate':
-            if (args.length >= 1) {
+            if (args.length === 0) {
+                reply('用法: **rotate <水平°> [垂直°]');
+                break;
+            }
+            {
                 const dy = (parseFloat(args[0]) || 0) * Math.PI / 180;
                 const dp = args.length >= 2 ? (parseFloat(args[1]) || 0) * Math.PI / 180 : 0;
                 const ny = bot.entity.yaw + dy;
@@ -1437,16 +1511,20 @@ function executeCommand(line, playerName) {
             reply('下马');
             break;
         case 'equip':
-            if (args.length >= 1) {
-                equipItem(args[0], args.length >= 2 ? args[1] : 'hand');
-                reply(`装备 ${args[0]}`);
+            if (args.length === 0) {
+                reply('用法: **equip <物品名> [槽位]  槽位: head/torso/legs/feet/off-hand');
+                break;
             }
+            equipItem(args[0], args.length >= 2 ? args[1] : 'hand');
+            reply(`装备 ${args[0]}`);
             break;
         case 'unequip':
-            if (args.length >= 1) {
-                unequipItem(args[0]);
-                reply(`卸下 ${args[0]}`);
+            if (args.length === 0) {
+                reply('用法: **unequip <槽位>  槽位: head/torso/legs/feet/off-hand');
+                break;
             }
+            unequipItem(args[0]);
+            reply(`卸下 ${args[0]}`);
             break;
         case 'unequipall':
             unequipAll().then(r => reply(r.msg));
@@ -1470,7 +1548,11 @@ function executeCommand(line, playerName) {
             }
             {
                 const itemName = args[0].toLowerCase();
-                const count = args.length > 1 ? Math.max(1, Math.min(64, parseInt(args[1]) || 1)) : 1;
+                const count = args.length > 1 ? parseInt(args[1]) : 1;
+                if (args.length > 1 && (isNaN(count) || count < 1 || count > 64)) {
+                    reply('数量范围: 1-64');
+                    break;
+                }
                 let item = bot.registry.itemsByName[itemName];
                 if (!item) {
                     const shortName = itemName.replace(/^minecraft:/, '');
