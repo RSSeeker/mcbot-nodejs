@@ -409,18 +409,12 @@ function startStatusPolling() {
 function checkPort(port) {
     return new Promise((resolve) => {
         const tester = net.createServer();
-        tester.once('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
-                resolve(false);
-            } else {
-                resolve(false);
-            }
-        });
+        tester.once('error', () => resolve(false));
         tester.once('listening', () => {
             tester.close();
             resolve(true);
         });
-        tester.listen(port, '0.0.0.0');
+        tester.listen(port);
     });
 }
 
@@ -449,19 +443,40 @@ async function startViewer() {
         return;
     }
 
+    // 临时修补 http.Server.listen，捕获 EADDRINUSE 异步错误防止进程崩溃
+    const origListen = http.Server.prototype.listen;
+    let viewerError = null;
+    http.Server.prototype.listen = function (...args) {
+        this.once('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                viewerError = err;
+            }
+        });
+        return origListen.apply(this, args);
+    };
+
     try {
         mineflayerViewer(bot, {
             port: port,
             firstPerson: true,
             viewDistance: viewerViewDistance,
         });
-        viewer = true;
-        log('info', `画面渲染已启动，端口: ${port}, 视距: ${viewerViewDistance}`);
-        io.emit('viewer_status', { active: true, port: port });
     } catch (err) {
-        log('warn', `画面渲染启动失败: ${err.message}`);
-        io.emit('viewer_status', { active: false });
+        viewerError = err;
     }
+
+    // 恢复原始 listen 方法
+    http.Server.prototype.listen = origListen;
+
+    if (viewerError) {
+        log('warn', `画面渲染启动失败: ${viewerError.message}`);
+        io.emit('viewer_status', { active: false });
+        return;
+    }
+
+    viewer = true;
+    log('info', `画面渲染已启动，端口: ${port}, 视距: ${viewerViewDistance}`);
+    io.emit('viewer_status', { active: true, port: port });
 }
 
 function closeViewer() {
@@ -483,6 +498,18 @@ io.on('connection', (socket) => {
     socket.emit('status', currentStatus);
     socket.emit('chat_history', chatLog.slice(-50));
     socket.emit('ai_status', { available: ollamaAvailable, model: ollama.model, config_enabled: config.ai_enabled !== false });
+
+    // 如果 Bot 已在线，通知新客户端
+    if (bot && currentStatus.connected) {
+        socket.emit('bot_connected', {
+            username: currentStatus.username,
+            host: currentStatus.host,
+            port: currentStatus.port,
+        });
+        if (viewer) {
+            socket.emit('viewer_status', { active: true, port: viewerPort });
+        }
+    }
 
     socket.on('connect_bot', (data = {}) => {
         if (bot && currentStatus.connected) {
@@ -564,6 +591,11 @@ io.on('connection', (socket) => {
         if (!bot) return;
         const state = data && data.state !== undefined ? data.state : !bot.getControlState('sneak');
         bot.setControlState('sneak', state);
+        bot._client.write('entity_action', {
+            entityId: bot.entity.id,
+            actionId: state ? 0 : 1,
+            jumpBoost: 0
+        });
     });
 
     socket.on('sprint', (data) => {
@@ -739,20 +771,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        shouldReconnect = false;
-        isFlying = false;
-        log('info', 'Web 客户端已断开，关闭 Bot');
-        if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
-        closeViewer();
-        closeLog();
-        if (bot) {
-            try { bot.quit(); } catch (e) {}
-            bot = null;
-        }
-        currentStatus.connected = false;
-        io.emit('status', currentStatus);
-        io.emit('bot_disconnected');
-        addEvent('info', 'Web 客户端断开，Bot 已关闭');
+        log('info', 'Web 客户端已断开（Bot 继续保持在线）');
     });
 });
 
@@ -920,7 +939,20 @@ function handleAction(action) {
         case 'dismount':
             if (!bot.vehicle) { log('info', '当前未骑乘'); break; }
             bot.setControlState('sneak', true);
-            setTimeout(() => { bot.setControlState('sneak', false); log('info', '已离开载具'); }, 100);
+            bot._client.write('entity_action', {
+                entityId: bot.entity.id,
+                actionId: 0,
+                jumpBoost: 0
+            });
+            setTimeout(() => {
+                bot.setControlState('sneak', false);
+                bot._client.write('entity_action', {
+                    entityId: bot.entity.id,
+                    actionId: 1,
+                    jumpBoost: 0
+                });
+                log('info', '已离开载具');
+            }, 100);
             break;
         case 'cancel':
             stopMove();
@@ -1339,8 +1371,14 @@ function executeCommand(line, playerName) {
             reply(args.length > 0 ? `长按使用 ${args[0]}ms` : '长按使用');
             break;
         case 'sneak':
-            bot.setControlState('sneak', !bot.getControlState('sneak'));
-            reply(bot.getControlState('sneak') ? '已潜行' : '已取消潜行');
+            const sneakState = !bot.getControlState('sneak');
+            bot.setControlState('sneak', sneakState);
+            bot._client.write('entity_action', {
+                entityId: bot.entity.id,
+                actionId: sneakState ? 0 : 1,
+                jumpBoost: 0
+            });
+            reply(sneakState ? '已潜行' : '已取消潜行');
             break;
         case 'sprint':
             bot.setControlState('sprint', !bot.getControlState('sprint'));

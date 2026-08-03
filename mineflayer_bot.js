@@ -681,6 +681,11 @@ rl.on('line', (line) => {
                 // 潜行切换: {type:"sneak", state:true|false|null}
                 const sneakState = data.state != null ? data.state : !bot.getControlState('sneak');
                 bot.setControlState('sneak', sneakState);
+                bot._client.write('entity_action', {
+                    entityId: bot.entity.id,
+                    actionId: sneakState ? 0 : 1,
+                    jumpBoost: 0
+                });
                 logInfo('[Sneak] ' + (sneakState ? 'ON' : 'OFF'));
                 break;
 
@@ -846,8 +851,18 @@ rl.on('line', (line) => {
                     break;
                 }
                 bot.setControlState('sneak', true);
+                bot._client.write('entity_action', {
+                    entityId: bot.entity.id,
+                    actionId: 0,
+                    jumpBoost: 0
+                });
                 setTimeout(() => {
                     bot.setControlState('sneak', false);
+                    bot._client.write('entity_action', {
+                        entityId: bot.entity.id,
+                        actionId: 1,
+                        jumpBoost: 0
+                    });
                     logInfo('[Dismount] 已离开载具');
                 }, 100);
                 break;

@@ -502,8 +502,14 @@ class AIController {
                         result = `切换到槽位 ${targetSlot}`;
                         break;
                     case 'sneak':
-                        bot.setControlState('sneak', !!fnArgs.state);
-                        result = fnArgs.state ? '开始潜行' : '停止潜行';
+                        const sneakState = !!fnArgs.state;
+                        bot.setControlState('sneak', sneakState);
+                        bot._client.write('entity_action', {
+                            entityId: bot.entity.id,
+                            actionId: sneakState ? 0 : 1,
+                            jumpBoost: 0
+                        });
+                        result = sneakState ? '开始潜行' : '停止潜行';
                         break;
                     case 'sprint':
                         bot.setControlState('sprint', !!fnArgs.state);
