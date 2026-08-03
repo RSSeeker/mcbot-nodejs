@@ -1269,6 +1269,7 @@ function executeCommand(line, playerName) {
                 '**unequipall - 卸下全部装备',
                 '**movetohotbar - 背包物品移入快捷栏',
                 '**pickblock - 选取准星方块',
+                '**itemid - 查看手中物品ID',
                 '**fly [on/off] - 切换飞行模式',
                 '**give <物品名> [数量] - 创造模式获取物品',
                 '**ping [地址] - 延迟测试/服务器信息',
@@ -1536,6 +1537,22 @@ function executeCommand(line, playerName) {
         case 'pickblock':
             pickBlock();
             reply('选取方块');
+            break;
+        case 'itemid':
+            {
+                if (!bot || !bot.heldItem) {
+                    reply('手中没有物品');
+                    break;
+                }
+                const item = bot.heldItem;
+                reply([
+                    `名称: ${item.displayName || item.name}`,
+                    `ID: ${item.type}`,
+                    `Name: ${item.name}`,
+                    `数量: ${item.count}`,
+                    item.nbt ? `NBT: ${JSON.stringify(item.nbt).substring(0, 100)}` : '',
+                ].filter(Boolean).join(' | '));
+            }
             break;
         case 'give':
             if (args.length === 0) {
