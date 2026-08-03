@@ -29,6 +29,8 @@ const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 const CMD_PREFIX = config.command_prefix || '**';
 const REPLY_MODE = config.reply_mode || 'whisper';
+const TRUSTED_PLAYERS = config.trusted_players || [];
+const TRUSTED_COMMANDS = config.trusted_commands || [];
 
 // ── 聊天日志记录器 ──
 const LOG_CHAT_ENABLED = config.log_chat_enabled !== false;
@@ -1204,6 +1206,14 @@ function executeCommand(line, playerName) {
     const parts = line.split(/\s+/);
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1);
+
+    if (TRUSTED_PLAYERS.length > 0 && TRUSTED_COMMANDS.includes(cmd)) {
+        if (!TRUSTED_PLAYERS.includes(playerName)) {
+            reply(`权限不足: ${cmd} 仅信任玩家可用`);
+            log('warn', `[权限] ${playerName} 尝试执行 ${cmd}，被拒绝`);
+            return;
+        }
+    }
 
     function reply(msg) {
         const MAX_LEN = 200;
