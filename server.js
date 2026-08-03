@@ -10,6 +10,7 @@
 
 const express = require('express');
 const http = require('http');
+const net = require('net');
 const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
@@ -27,6 +28,7 @@ const { AIController } = require('./ai_controller');
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 const CMD_PREFIX = config.command_prefix || '**';
+const REPLY_MODE = config.reply_mode || 'whisper';
 
 // ── 聊天日志记录器 ──
 const LOG_CHAT_ENABLED = config.log_chat_enabled !== false;
@@ -109,7 +111,7 @@ function sendSplitMessage(msg, targetPlayer, maxLen = 200) {
     if (!clean) return;
     for (let i = 0; i < clean.length; i += maxLen) {
         const chunk = clean.substring(i, i + maxLen);
-        if (targetPlayer) {
+        if (targetPlayer && REPLY_MODE === 'whisper') {
             bot.chat(`/msg ${targetPlayer} ${chunk}`);
         } else {
             bot.chat(chunk);
@@ -404,18 +406,58 @@ function startStatusPolling() {
 }
 
 // ── 画面渲染（Viewer）──
-function startViewer() {
+function checkPort(port) {
+    return new Promise((resolve) => {
+        const tester = net.createServer();
+        tester.once('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                resolve(false);
+            } else {
+                resolve(false);
+            }
+        });
+        tester.once('listening', () => {
+            tester.close();
+            resolve(true);
+        });
+        tester.listen(port, '0.0.0.0');
+    });
+}
+
+async function startViewer() {
     if (!bot) return;
+
+    let port = viewerPort;
+    let available = await checkPort(port);
+
+    if (!available) {
+        log('warn', `端口 ${port} 已被占用，尝试其他端口...`);
+        for (let offset = 1; offset <= 10; offset++) {
+            port = viewerPort + offset;
+            available = await checkPort(port);
+            if (available) {
+                viewerPort = port;
+                log('info', `找到可用端口: ${port}`);
+                break;
+            }
+        }
+    }
+
+    if (!available) {
+        log('warn', `画面渲染启动失败: 端口 ${viewerPort}-${viewerPort + 10} 均被占用`);
+        io.emit('viewer_status', { active: false });
+        return;
+    }
 
     try {
         mineflayerViewer(bot, {
-            port: viewerPort,
+            port: port,
             firstPerson: true,
             viewDistance: viewerViewDistance,
         });
         viewer = true;
-        log('info', `画面渲染已启动，端口: ${viewerPort}, 视距: ${viewerViewDistance}`);
-        io.emit('viewer_status', { active: true, port: viewerPort });
+        log('info', `画面渲染已启动，端口: ${port}, 视距: ${viewerViewDistance}`);
+        io.emit('viewer_status', { active: true, port: port });
     } catch (err) {
         log('warn', `画面渲染启动失败: ${err.message}`);
         io.emit('viewer_status', { active: false });
@@ -1159,7 +1201,7 @@ function executeCommand(line, playerName) {
         }
 
         function sendChunk(chunk) {
-            if (playerName) {
+            if (playerName && REPLY_MODE === 'whisper') {
                 bot.chat(`/msg ${playerName} ${chunk}`);
             } else {
                 bot.chat(chunk);

@@ -9,6 +9,7 @@
         "password": "登录密码（无密码留空）"
     },
     "command_prefix": "**",
+    "reply_mode": "whisper",
     "track_players": ["玩家名1", "玩家名2"],
     "viewer_port": 3000,
     "viewer_view_distance": 10,
