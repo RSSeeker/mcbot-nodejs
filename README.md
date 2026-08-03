@@ -152,7 +152,7 @@ npm install
 npm start
 ```
 
-![Web 控制面板](webui.jpeg)
+<img src="webui.jpeg" alt="Web 控制面板" width="100%">
 
 启动后在浏览器打开 `http://localhost:5001`，可视控制面板功能包括：
 
