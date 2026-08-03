@@ -372,15 +372,9 @@ rl.on('line', (line) => {
                 break;
 
             case 'jump':
-                if (bot.vehicle) {
-                    // 骑乘时跳跃（马）
-                    bot.jump();
-                    logInfo('[Jump] 载具跳跃');
-                } else {
-                    bot.setControlState('jump', true);
-                    setTimeout(() => bot.setControlState('jump', false), 200);
-                    logInfo('[Jump]');
-                }
+                bot.setControlState('jump', true);
+                setTimeout(() => bot.setControlState('jump', false), 200);
+                logInfo('[Jump]');
                 break;
 
             case 'stop':

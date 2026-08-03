@@ -574,12 +574,8 @@ io.on('connection', (socket) => {
 
     socket.on('jump', () => {
         if (!bot) return;
-        if (bot.vehicle) {
-            bot.jump();
-        } else {
-            bot.setControlState('jump', true);
-            setTimeout(() => bot.setControlState('jump', false), 200);
-        }
+        bot.setControlState('jump', true);
+        setTimeout(() => bot.setControlState('jump', false), 200);
     });
 
     socket.on('stop', () => {
@@ -1313,8 +1309,8 @@ function executeCommand(line, playerName) {
             }
             break;
         case 'jump':
-            if (bot.vehicle) bot.jump();
-            else { bot.setControlState('jump', true); setTimeout(() => bot.setControlState('jump', false), 200); }
+            bot.setControlState('jump', true);
+            setTimeout(() => bot.setControlState('jump', false), 200);
             reply('跳跃');
             break;
         case 'stop':
