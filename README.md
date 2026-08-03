@@ -10,9 +10,10 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 │  Node.js 控制层 (server.js)                   │
 │  - Express 静态文件服务                        │
 │  - SocketIO 实时 WebSocket 通信               │
-│  - Mineflayer 协议代理（同一进程，无 IPC）      │
+│  - Mineflayer 协议代理                        │
+│  - Ollama AI 客户端                          │
+│  - AI 自主控制模块                           │
 │  - 聊天命令系统（**command）                   │
-│  - Ollama AI 集成（自动回复 + 自主控制）       │
 │  - 聊天日志记录                                │
 │  - 状态轮询 & 事件转发                         │
 │    │ TCP                                      │
@@ -27,8 +28,9 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 - **Web 控制台**：SocketIO 实时 Web 面板，可视化移动控制、视角转动、状态监控
 - **画面渲染**：集成 prismarine-viewer，在浏览器中实时渲染机器人第一人称视角画面
 - **聊天监听与命令响应**：监听公聊/私聊消息，响应 `command_prefix` 开头的玩家指令
-- **Ollama AI 集成**：支持 AI 自动回复公聊/私聊、AI 自主控制 Bot 行为（Function Calling）
+- **Ollama AI 集成**：支持 AI 自动回复公聊/私聊（可配置回复模式）、AI 自主控制 Bot 行为（Function Calling）
 - **聊天日志记录**：玩家聊天/系统消息/命令等写入日志文件，可通过 config 开关控制
+- **权限控制**：信任玩家白名单，可限制高风险指令仅信任玩家使用
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
 - **视角转动**：D-pad 方向键/键盘箭头增量旋转视角，支持绝对角度设置和看向玩家
 - **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/开箱/骑乘等）、使用物品、潜行、疾跑、丢物品、切格子
@@ -41,16 +43,12 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 
 ```
 mcbot-web/
-├── server.js              # 主入口：Express + SocketIO + Mineflayer + Viewer + AI
-├── ai_controller.js       # AI 自主控制模块（Ollama Function Calling）
-├── ollama.js              # Ollama API 客户端（对话历史/自动回复/模型管理）
-├── mineflayer_bot.js      # 备用：独立 Mineflayer 代理（Python IPC 模式）
+├── server.js              # 单文件入口：Express + SocketIO + Mineflayer + Viewer + Ollama AI
 ├── templates/
 │   └── index.html         # Web 控制台前端页面
 ├── config.json            # 配置文件
 ├── config.example.json    # 配置文件模板
 ├── package.json           # Node.js 依赖
-├── _rebuild_viewer.js     # Webpack 构建脚本，重新构建 viewer 前端资源
 ├── logs/                  # 聊天日志目录（自动创建）
 └── README.md
 ```
@@ -87,7 +85,10 @@ npm install
         "password": "登录密码（无密码留空）"
     },
     "command_prefix": "**",
+    "reply_mode": "whisper",
     "track_players": ["玩家名1", "玩家名2"],
+    "trusted_players": ["玩家名1"],
+    "trusted_commands": ["restart", "stop", "cmd", "send"],
     "viewer_port": 3000,
     "viewer_view_distance": 10,
     "log_chat_enabled": true,
@@ -129,7 +130,10 @@ npm install
 | `bot.username` | Bot 用户名 |
 | `bot.password` | 登录密码（离线模式留空） |
 | `command_prefix` | 游戏内指令前缀，可改为 `!`、`/` 等 |
+| `reply_mode` | AI 回复模式：`whisper`（私聊）或 `public`（公屏 @提问者） |
 | `track_players` | 追踪玩家列表，Bot 会跟随/响应这些玩家 |
+| `trusted_players` | 信任玩家白名单，空数组 `[]` 表示信任所有玩家 |
+| `trusted_commands` | 仅信任玩家可执行的指令列表（如 `restart`、`cmd` 等） |
 | `viewer_port` | 画面渲染 HTTP 端口，默认 3000 |
 | `viewer_view_distance` | 画面渲染区块视距，范围 2-20，默认 10 |
 | `log_chat_enabled` | 是否启用聊天日志记录，默认 true |
@@ -153,14 +157,17 @@ npm start
 - **连接配置**：网页顶部填写服务器/用户名/密码/画面端口/视距/追踪玩家等
 - **画面渲染**：点击"画面"按钮在浏览器中实时渲染 Bot 第一人称视角
 - **移动控制**：D-pad 方向键 + 跳跃/潜行/疾跑切换按钮，支持键盘快捷键（可在 config.json 中自定义按键绑定）
-- **视角转动**：独立的视角 D-pad，键盘方向键控制，支持 Yaw/Pitch 精确输入
-- **状态面板**：实时显示坐标、血量、饱食度、视角、手持物品、潜行/疾跑/爬行/骑乘状态
+- **定时移动**：独立的方向+时长模块，Bot 按指定方向移动指定毫秒后自动停止
+- **视角转动**：独立的视角 D-pad，键盘方向键控制，支持 Yaw/Pitch 精确输入和看向玩家/坐标
+- **状态面板**：实时显示坐标、血量、饱食度、视角、手持物品、潜行/疾跑/爬行/骑乘/飞行状态
 - **物品栏**：快捷栏 1-9 点击切换，一键移入背包物品
-- **动作按钮**：攻击、挖掘、放置、交互、使用、长按使用、下马、丢物品、丢全部
+- **动作按钮**：攻击、连击、挖掘、持续挖、放置、交互、使用、长按使用、丢弃、全丢、下马、选取方块、飞行、取消、重生
+- **定时动作**：攻击/挖掘/长按使用 + 持续时间，到期自动停止
 - **聊天面板**：实时公聊/私聊/系统消息，支持聊天输入和 Minecraft 指令执行
-- **AI 对话**：与 AI 模型对话，支持模型切换、历史清除
-- **寻路/跟随**：输入坐标或玩家名进行导航
+- **AI 对话**：与 AI 模型对话，支持模型切换下拉框、自动回复开关、历史清除
+- **寻路/跟随**：输入坐标或玩家名进行导航，支持跟随距离设置
 - **装备控制**：指定物品名装备到指定槽位，一键卸下全部
+- **Ping 模块**：输入服务器地址（留空即当前服务器）查询服务器信息
 - **重启**：Bot 连接后一键进程级重启
 
 ## 可用命令（游戏中）
@@ -172,7 +179,7 @@ npm start
 | `**help` | 列出所有可用命令 |
 | `**send <消息>` | 让 Bot 发送公聊消息 |
 | `**cmd <指令>` | 让 Bot 执行 Minecraft 指令 |
-| `**ping` | 延迟测试 |
+| `**ping [地址:端口]` | Ping 服务器（无参数=当前，有参数=外部服务器） |
 | `**restart` | 进程级重启 Bot |
 | `**respawn` | 重生 |
 
@@ -222,6 +229,8 @@ npm start
 | `**unequipall` | 一键卸下全部装备（背包有空间时） |
 | `**movetohotbar` | 将背包物品移入快捷栏的空位 |
 | `**pickblock` | 选取准星方块（创造模式直接拿，生存模式切背包） |
+| `**itemid` | 显示手中物品的名称和 ID |
+| `**give <物品名> [数量]` | 从创造物品栏获取物品（仅创造模式，数量 1-64） |
 
 ### AI 命令
 

@@ -635,6 +635,19 @@
                 </select>
                 <button class="btn btn-accent2" onclick="doEquip()" style="padding:4px 8px;font-size:10px;">装备</button>
                 <button class="btn" onclick="doUnequip()" style="padding:4px 8px;font-size:10px;color:var(--danger);">卸下</button>
+                <button class="btn" onclick="doUnequipAll()" style="padding:4px 8px;font-size:10px;color:var(--danger);">全部卸下</button>
+            </div>
+
+            <div class="panel-title">⏱ 定时移动</div>
+            <div class="row-group" style="flex-wrap:wrap;">
+                <select id="moveDir" style="flex:1;min-width:60px;background:#000;border:1px solid var(--border);color:var(--text);padding:4px;border-radius:5px;font-size:10px;">
+                    <option value="forward">前进</option>
+                    <option value="back">后退</option>
+                    <option value="left">左移</option>
+                    <option value="right">右移</option>
+                </select>
+                <input type="number" id="moveDur" value="1000" min="0" step="100" style="width:55px;flex:none;" title="持续时间(ms)">
+                <button class="btn btn-accent" onclick="doTimedMove()" style="padding:4px 8px;font-size:10px;">Go</button>
             </div>
         </div>
 
@@ -714,7 +727,25 @@
             <div class="panel-title">👤 跟随</div>
             <div class="row-group">
                 <input type="text" id="followPlayer" placeholder="玩家名" style="flex:1;">
+                <label>距离:</label><input type="number" id="followDist" value="3" min="0" step="1" style="width:40px;flex:none;">
                 <button class="btn btn-accent2" onclick="doFollow()" style="padding:4px 8px;font-size:10px;">跟随</button>
+            </div>
+
+            <div class="panel-title">⏱ 定时动作</div>
+            <div class="row-group" style="flex-wrap:wrap;">
+                <select id="timedAction" style="flex:1;min-width:60px;background:#000;border:1px solid var(--border);color:var(--text);padding:4px;border-radius:5px;font-size:10px;">
+                    <option value="attack">攻击</option>
+                    <option value="dig">挖掘</option>
+                    <option value="usehold">长按使用</option>
+                </select>
+                <input type="number" id="timedActionDur" value="3000" min="1" step="100" style="width:55px;flex:none;" title="持续时间(ms)">
+                <button class="btn btn-accent" onclick="doTimedAction()" style="padding:4px 8px;font-size:10px;">Go</button>
+            </div>
+
+            <div class="panel-title">📡 Ping</div>
+            <div class="row-group">
+                <input type="text" id="pingAddr" placeholder="服务器地址 (留空=当前)" style="flex:1;">
+                <button class="btn btn-accent2" onclick="doPing()" style="padding:4px 8px;font-size:10px;">Ping</button>
             </div>
 
             <div class="panel-title">📋 事件日志</div>
@@ -725,6 +756,13 @@
             <div class="panel-title">🤖 AI 对话</div>
             <div class="ai-chat-panel">
                 <div class="ai-status offline" id="aiStatus">⚫ AI 未连接</div>
+                <div class="row-group" style="flex-wrap:wrap;">
+                    <select id="aiModelSelect" onchange="switchAiModel()" style="flex:1;min-width:80px;background:#000;border:1px solid var(--border);color:var(--text);padding:4px;border-radius:5px;font-size:10px;">
+                        <option value="">加载中...</option>
+                    </select>
+                    <button class="btn" onclick="loadAiModels()" style="padding:4px 6px;font-size:10px;" title="刷新模型列表">🔄</button>
+                    <button class="toggle-btn" id="btnAiMode" onclick="toggleAiMode()" style="padding:4px 8px;font-size:10px;">🤖 自动回复</button>
+                </div>
                 <div class="ai-messages" id="aiMessages">
                     <div class="ai-msg system">
                         <div class="ai-text">连接 Bot 后可使用 AI 对话</div>
@@ -996,7 +1034,7 @@
         function toggleSneak() {
             if (!connected) return;
             sneakActive = !sneakActive;
-            socket.emit('set_control', { control: 'sneak', state: sneakActive });
+            socket.emit('sneak', { state: sneakActive });
             document.getElementById('btnSneakTgl').classList.toggle('active', sneakActive);
         }
 
@@ -1011,7 +1049,7 @@
             if (!connected) return;
             socket.emit('stop');
             stopMove();
-            if (sneakActive) { sneakActive = false; socket.emit('set_control', { control: 'sneak', state: false }); }
+            if (sneakActive) { sneakActive = false; socket.emit('sneak', { state: false }); }
             if (sprintActive) { sprintActive = false; socket.emit('set_control', { control: 'sprint', state: false }); }
             if (flyActive) { flyActive = false; socket.emit('fly', { state: false }); }
             if (jumpHeld) { jumpHeld = false; socket.emit('set_control', { control: 'jump', state: false }); }
@@ -1121,7 +1159,29 @@
             if (!connected) return;
             const player = document.getElementById('followPlayer').value.trim();
             if (!player) return;
-            socket.emit('follow', { player: player });
+            const dist = parseInt(document.getElementById('followDist').value) || 3;
+            socket.emit('follow', { player: player, distance: dist });
+        }
+
+        function doTimedMove() {
+            if (!connected) return;
+            const dir = document.getElementById('moveDir').value;
+            const dur = parseInt(document.getElementById('moveDur').value) || 0;
+            socket.emit('move', { direction: dir, duration: dur });
+        }
+
+        function doTimedAction() {
+            if (!connected) return;
+            const action = document.getElementById('timedAction').value;
+            const dur = parseInt(document.getElementById('timedActionDur').value) || 1000;
+            socket.emit('action', { action: action + '_hold', duration: dur });
+        }
+
+        function doPing() {
+            if (!connected) return;
+            const addr = document.getElementById('pingAddr').value.trim();
+            const msg = addr ? `**ping ${addr}` : `**ping`;
+            socket.emit('chat', { message: msg });
         }
 
         function switchSlot(slot) {
@@ -1147,6 +1207,11 @@
             if (!connected) return;
             const dest = document.getElementById('equipDest').value;
             socket.emit('unequip', { destination: dest });
+        }
+
+        function doUnequipAll() {
+            if (!connected) return;
+            socket.emit('unequipall');
         }
 
         function toggleViewer() {
@@ -1220,7 +1285,7 @@
                     if (flyActive) {
                         socket.emit('set_control', { control: 'sneak', state: true });
                     } else {
-                        toggleSneak();
+                        if (!sneakActive) toggleSneak();
                     }
                     break;
                 case 'sprint': toggleSprint(); break;
@@ -1260,6 +1325,8 @@
                 case 'sneak':
                     if (flyActive) {
                         socket.emit('set_control', { control: 'sneak', state: false });
+                    } else {
+                        if (sneakActive) toggleSneak();
                     }
                     break;
                 case 'rotate_left': case 'rotate_right': case 'rotate_up': case 'rotate_down':
@@ -1373,12 +1440,58 @@
             document.getElementById('aiStatus').textContent = '🟢 AI 就绪';
             document.getElementById('aiStatus').className = 'ai-status online';
             aiOnline = true;
+            loadAiModels();
         });
 
         socket.on('bot_disconnected', () => {
             document.getElementById('aiStatus').textContent = '⚫ AI 未连接';
             document.getElementById('aiStatus').className = 'ai-status offline';
             aiOnline = false;
+        });
+
+        let aiAutoReply = false;
+        function toggleAiMode() {
+            if (!connected) return;
+            aiAutoReply = !aiAutoReply;
+            socket.emit('ai_set_mode', { enabled: aiAutoReply });
+            const btn = document.getElementById('btnAiMode');
+            btn.classList.toggle('active', aiAutoReply);
+            btn.textContent = aiAutoReply ? '🤖 自动回复:开' : '🤖 自动回复';
+        }
+
+        function loadAiModels() {
+            socket.emit('ai_get_models');
+        }
+
+        function switchAiModel() {
+            const sel = document.getElementById('aiModelSelect');
+            const model = sel.value;
+            if (!model) return;
+            socket.emit('ai_chat', { message: '__switch_model__', model: model });
+        }
+
+        socket.on('ai_models', (data) => {
+            const sel = document.getElementById('aiModelSelect');
+            sel.innerHTML = '';
+            if (data.models && data.models.length > 0) {
+                data.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.name;
+                    const size = m.size ? (m.size > 1e9 ? (m.size / 1e9).toFixed(1) + 'GB' : (m.size / 1e6).toFixed(0) + 'MB') : '';
+                    opt.textContent = size ? `${m.name} (${size})` : m.name;
+                    if (m.name === data.current) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            } else {
+                sel.innerHTML = '<option value="">无可用模型</option>';
+            }
+        });
+
+        socket.on('ai_mode_changed', (data) => {
+            aiAutoReply = data.enabled;
+            const btn = document.getElementById('btnAiMode');
+            btn.classList.toggle('active', aiAutoReply);
+            btn.textContent = aiAutoReply ? '🤖 自动回复:开' : '🤖 自动回复';
         });
     </script>
 </body>

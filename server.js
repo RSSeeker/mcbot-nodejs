@@ -891,7 +891,8 @@ io.on('connection', (socket) => {
     socket.on('move', (data) => {
         if (!bot) return;
         const dir = data.direction;
-        const dur = data.duration || 1000;
+        const dur = data.duration != null ? parseInt(data.duration) : 1000;
+        if (dur <= 0) return;
         startMove(dir, dur);
     });
 
@@ -926,8 +927,8 @@ io.on('connection', (socket) => {
     socket.on('action', (data) => {
         if (!bot) return;
         const action = data.action;
-        handleAction(action);
-        writeLog('ACTION', `Bot 执行动作: ${action}`);
+        handleAction(action, data.duration);
+        writeLog('ACTION', `Bot 执行动作: ${action}${data.duration ? ' (持续' + data.duration + 'ms)' : ''}`);
         addEvent('action', action);
     });
 
@@ -1059,6 +1060,21 @@ io.on('connection', (socket) => {
         }
         const message = (data.message || '').trim();
         if (!message) return;
+
+        if (message === '__switch_model__') {
+            if (data.model) {
+                ollama.model = data.model;
+                ollama.clearAllHistory();
+                try {
+                    const models = await ollama.listModels();
+                    socket.emit('ai_models', { models, current: data.model });
+                } catch (e) {
+                    socket.emit('ai_models', { models: [], current: data.model });
+                }
+            }
+            return;
+        }
+
         socket.emit('ai_typing', true);
         try {
             const reply = await ollama.chatWithHistory('web', message);
@@ -1078,9 +1094,9 @@ io.on('connection', (socket) => {
     socket.on('ai_get_models', async () => {
         try {
             const models = await ollama.listModels();
-            socket.emit('ai_models', models);
+            socket.emit('ai_models', { models, current: ollama.model });
         } catch (err) {
-            socket.emit('ai_models', []);
+            socket.emit('ai_models', { models: [], current: ollama.model });
         }
     });
 
@@ -1145,8 +1161,9 @@ function getTargetFace(block) {
 //  动作处理
 // ═══════════════════════════════════
 
-function handleAction(action) {
+function handleAction(action, duration) {
     if (!bot) return;
+    const dur = parseInt(duration) || 0;
     switch (action) {
         case 'attack':
             bot.swingArm('left');
@@ -1166,6 +1183,7 @@ function handleAction(action) {
             if (holdEntity) {
                 Promise.resolve(bot.attack(holdEntity)).catch(err => log('warn', `攻击失败: ${err.message}`));
             }
+            if (dur > 0) setTimeout(() => handleAction('cancel', 0), dur);
             break;
         case 'dig':
             bot.swingArm('left');
@@ -1191,6 +1209,7 @@ function handleAction(action) {
                     Promise.resolve(bot.dig(holdDig, true)).catch(err => log('warn', `挖掘失败: ${err.message}`));
                 }
             }
+            if (dur > 0) setTimeout(() => handleAction('cancel', 0), dur);
             break;
         case 'place':
             (async () => {
@@ -1230,6 +1249,7 @@ function handleAction(action) {
             }
             isRightClickHolding = true;
             bot.activateItem();
+            if (dur > 0) setTimeout(() => handleAction('cancel', 0), dur);
             break;
         case 'drop':
             const held = bot.heldItem;
