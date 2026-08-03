@@ -1479,11 +1479,37 @@ function executeCommand(line, playerName) {
             reply(isFlying ? '飞行模式已开启' : '飞行模式已关闭');
             break;
         case 'ping':
-            const start = Date.now();
-            bot.chat('/ping');
-            bot.once('message', () => {
-                const ping = Date.now() - start;
-                reply(`Pong! ${ping}ms`);
+            const mc = require('minecraft-protocol');
+            let pingHost, pingPort;
+
+            if (args.length > 0) {
+                // **ping <host>[:port]  ping 外部服务器
+                const addr = args[0];
+                const colonIdx = addr.lastIndexOf(':');
+                pingHost = colonIdx > 0 ? addr.substring(0, colonIdx) : addr;
+                pingPort = colonIdx > 0 ? parseInt(addr.substring(colonIdx + 1)) || 25565 : 25565;
+                reply(`正在 Ping ${pingHost}:${pingPort}...`);
+            } else {
+                // **ping   ping 当前服务器
+                pingHost = bot.mc_srv.host;
+                pingPort = bot.mc_srv.port;
+            }
+
+            mc.ping({ host: pingHost, port: pingPort }, (err, results) => {
+                if (err || !results) {
+                    reply(`Ping 失败: ${err ? err.message : '无响应'}`);
+                    return;
+                }
+                const motd = (typeof results.description === 'string')
+                    ? results.description
+                    : results.description?.text || results.description?.extra?.map(e => e.text).join('') || '';
+                const motdClean = motd.replace(/§./g, '').replace(/\n/g, ' ').trim().substring(0, 80);
+                const version = results.version?.name || '?';
+                const online = results.players?.online ?? '?';
+                const max = results.players?.max ?? '?';
+                const latency = results.latency != null ? `${results.latency}ms` : '?';
+
+                reply(`[${pingHost}] ${motdClean || '无MOTD'} | 版本: ${version} | 在线: ${online}/${max} | 延迟: ${latency}`);
             });
             break;
         case 'ai':
