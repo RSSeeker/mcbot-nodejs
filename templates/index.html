@@ -366,17 +366,18 @@
         ::-webkit-scrollbar-track { background: #000; }
         ::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
 
-        .viewer-container {
+        .viewer-embed {
             display: none;
             width: 100%;
-            flex: 1;
+            height: 280px;
             min-height: 0;
             border-top: 1px solid var(--border);
             background: #000;
             position: relative;
+            margin-top: 4px;
         }
-        .viewer-container.active { display: flex; flex-direction: column; }
-        .viewer-container iframe {
+        .viewer-embed.active { display: flex; flex-direction: column; }
+        .viewer-embed iframe {
             width: 100%;
             height: 100%;
             border: none;
@@ -692,6 +693,15 @@
                     <input type="text" id="whisperMsg" placeholder="私聊消息...">
                     <button class="btn" onclick="sendWhisper()" style="padding:4px 8px;font-size:10px;color:var(--accent2);">私聊</button>
                 </div>
+
+                <!-- 画面渲染 (嵌入) -->
+                <div class="viewer-embed" id="viewerEmbed">
+                    <div class="viewer-placeholder" id="viewerPlaceholder">
+                        <div class="icon">👁️</div>
+                        <div>连接 Bot 后可查看机器人画面</div>
+                    </div>
+                    <iframe id="viewerFrame" src="" style="display:none;" allow="cross-origin-isolated"></iframe>
+                </div>
             </div>
         </div>
 
@@ -718,9 +728,9 @@
 
             <div class="panel-title">🗺️ 寻路</div>
             <div class="row-group">
-                <label>X:</label><input type="number" id="gotoX" value="0" step="1">
-                <label>Y:</label><input type="number" id="gotoY" value="64" step="1">
-                <label>Z:</label><input type="number" id="gotoZ" value="0" step="1">
+                <label>X:</label><input type="number" id="gotoX" value="0" step="1" style="width:45px;flex:none;">
+                <label>Y:</label><input type="number" id="gotoY" value="64" step="1" style="width:45px;flex:none;">
+                <label>Z:</label><input type="number" id="gotoZ" value="0" step="1" style="width:45px;flex:none;">
                 <button class="btn btn-accent" onclick="doGoto()" style="padding:4px 8px;font-size:10px;">Go</button>
             </div>
 
@@ -778,16 +788,6 @@
             </div>
         </div>
     </div>
-
-    <!-- 画面渲染面板 -->
-    <div class="viewer-container" id="viewerContainer">
-        <div class="viewer-placeholder" id="viewerPlaceholder">
-            <div class="icon">👁️</div>
-            <div>连接 Bot 后可查看机器人画面</div>
-        </div>
-        <iframe id="viewerFrame" src="" style="display:none;" allow="cross-origin-isolated"></iframe>
-    </div>
-</div>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
@@ -1215,7 +1215,7 @@
         }
 
         function toggleViewer() {
-            const container = document.getElementById('viewerContainer');
+            const container = document.getElementById('viewerEmbed');
             const iframe = document.getElementById('viewerFrame');
             const placeholder = document.getElementById('viewerPlaceholder');
             const btn = document.getElementById('btnViewer');
