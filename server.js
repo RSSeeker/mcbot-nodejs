@@ -1266,7 +1266,11 @@ function handleAction(action, duration) {
         case 'interact':
             const interEntity = bot.entityAtCursor();
             if (interEntity) {
-                Promise.resolve(bot.useOn(interEntity)).catch(err => log('warn', `交互失败: ${err.message}`));
+                if (interEntity.username) {
+                    Promise.resolve(bot.activateEntityAt(interEntity, interEntity.position)).catch(err => log('warn', `骑乘失败: ${err.message}`));
+                } else {
+                    Promise.resolve(bot.useOn(interEntity)).catch(err => log('warn', `交互失败: ${err.message}`));
+                }
             } else {
                 const interBlock = bot.blockAtCursor();
                 if (interBlock) {
@@ -1659,7 +1663,6 @@ function executeCommand(line, playerName) {
                 '**itemid - 查看手中物品ID',
                 '**fly [on/off] - 切换飞行模式',
                 '**give <物品名> [数量] - 创造模式获取物品',
-                '**ride <玩家名> - 骑乘玩家（仅可右键骑乘的服务器）',
                 '**ping [地址] - 延迟测试/服务器信息',
                 '**restart - 进程级重启',
             ];
@@ -2001,24 +2004,6 @@ function executeCommand(line, playerName) {
                 toggleFly(!isFlying);
             }
             reply(isFlying ? '飞行模式已开启' : '飞行模式已关闭');
-            break;
-        case 'ride':
-            if (args.length === 0) {
-                reply('用法: **ride <玩家名>');
-                break;
-            }
-            {
-                const targetName = args[0];
-                bot.chat('/tp ' + targetName);
-                setTimeout(() => {
-                    const targetEntity = bot.nearestEntity(e => e.username === targetName && bot.entity.position.distanceTo(e.position));
-                    if (targetEntity) {
-                        bot.chat('/tp ' + targetName);
-                        bot.activateEntityAt(targetEntity, targetEntity.position);
-                    }
-                }, 2000);
-                reply(`正在骑乘玩家: ${targetName}`);
-            }
             break;
         case 'ping':
             const mc = require('minecraft-protocol');
