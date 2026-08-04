@@ -174,6 +174,7 @@ class ExternalApiClient {
         const body = await this._post(payload);
         const msg = body.choices?.[0]?.message || {};
         const toolCalls = msg.tool_calls ? msg.tool_calls.map(tc => ({
+            id: tc.id,
             function: {
                 name: tc.function.name,
                 arguments: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments,
@@ -401,7 +402,7 @@ class AIController {
                     default: result = `未知工具: ${fnName}`;
                 }
             } catch (err) { result = `执行 ${fnName} 失败: ${err.message}`; }
-            results.push({ tool: fnName, result });
+            results.push({ tool: fnName, result, id: tc.id });
             this.log('info', `[AI动作] ${fnName}: ${result}`);
         }
         return results;
@@ -442,9 +443,10 @@ class AIController {
             const response = await this.ollama.chatWithTools(this.messages, AI_TOOLS, { temperature: 0.3 });
             if (response.tool_calls && response.tool_calls.length > 0) {
                 const results = await this._executeToolCalls(response.tool_calls);
-                const resultsText = results.map(r => `${r.tool}: ${r.result}`).join('\n');
                 this.messages.push({ role: 'assistant', content: response.content || '', tool_calls: response.tool_calls });
-                this.messages.push({ role: 'tool', content: resultsText });
+                for (const r of results) {
+                    this.messages.push({ role: 'tool', ...(r.id ? { tool_call_id: r.id } : {}), content: r.result });
+                }
                 this.io?.emit('ai_controller_log', { thought: response.content, actions: results });
             } else if (response.content) {
                 this.messages.push({ role: 'assistant', content: response.content });
@@ -533,6 +535,10 @@ const ollama = (config.ai_provider === 'external_api' && config.external_api && 
     ? new ExternalApiClient(config.external_api || {})
     : new OllamaClient(config.ollama || {});
 let ollamaAvailable = false;
+
+function getAiProviderName() {
+    return ollama.provider === 'external_api' ? '外部API' : 'Ollama';
+}
 
 // ── AI 自主控制器（io 初始化后赋值）──
 let aiController;
@@ -1200,7 +1206,7 @@ io.on('connection', (socket) => {
             return;
         }
         if (!ollamaAvailable) {
-            socket.emit('ai_reply', { message: 'AI 服务未连接，请确保 Ollama 已启动', model: '' });
+            socket.emit('ai_reply', { message: `AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`, model: '' });
             return;
         }
         const message = (data.message || '').trim();
@@ -2222,7 +2228,7 @@ function executeCommand(line, playerName) {
                 break;
             }
             if (!ollamaAvailable) {
-                reply('AI 服务未连接，请确保 Ollama 已启动');
+                reply(`AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`);
                 break;
             }
             if (args.length === 0) {
@@ -2237,7 +2243,7 @@ function executeCommand(line, playerName) {
                 break;
             }
             if (!ollamaAvailable) {
-                reply('AI 服务未连接，请确保 Ollama 已启动');
+                reply(`AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`);
                 break;
             }
             if (args.length > 0) {
@@ -2262,7 +2268,7 @@ function executeCommand(line, playerName) {
                 break;
             }
             if (!ollamaAvailable) {
-                reply('AI 服务未连接，请确保 Ollama 已启动');
+                reply(`AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`);
                 break;
             }
             if (args.length > 0) {
@@ -2293,7 +2299,7 @@ function executeCommand(line, playerName) {
                 break;
             }
             if (!ollamaAvailable) {
-                reply('AI 服务未连接，请确保 Ollama 已启动');
+                reply(`AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`);
                 break;
             }
             if (!aiController) {
@@ -2329,7 +2335,7 @@ function executeCommand(line, playerName) {
                 break;
             }
             if (!ollamaAvailable) {
-                reply('AI 服务未连接，请确保 Ollama 已启动');
+                reply(`AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`);
                 break;
             }
             if (args.length > 0) {
@@ -2356,7 +2362,7 @@ function executeCommand(line, playerName) {
 
 async function handleAiChat(message, playerName, replyFn) {
     if (!ollamaAvailable) {
-        replyFn('AI 服务未连接，请确保 Ollama 已启动');
+        replyFn(`AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`);
         return;
     }
     try {
@@ -2376,13 +2382,13 @@ async function handleAiChat(message, playerName, replyFn) {
 
 async function handleListModels(replyFn) {
     if (!ollamaAvailable) {
-        replyFn('AI 服务未连接，请确保 Ollama 已启动');
+        replyFn(`AI 服务未连接，请确保 ${getAiProviderName()} 已配置并可用`);
         return;
     }
     try {
         const models = await ollama.listModels();
         if (models.length === 0) {
-            replyFn('未找到可用模型，请确保 Ollama 已启动并拉取了模型');
+            replyFn(`未找到可用模型，请确保 ${getAiProviderName()} 已配置并拉取了模型`);
             return;
         }
         const modelList = models.map(m => m.name).join(' | ');
@@ -2432,20 +2438,21 @@ server.listen(PORT, '0.0.0.0', () => {
 
     // 检查 Ollama 服务状态（仅当 AI 功能启用时）
     if (config.ai_enabled !== false) {
+        const providerName = getAiProviderName();
         ollama.checkHealth().then(available => {
             ollamaAvailable = available;
             if (available) {
-                console.log('[Ollama] AI 服务已连接');
+                console.log(`[${providerName}] AI 服务已连接`);
                 ollama.listModels().then(models => {
                     const names = models.map(m => m.name).join(', ');
-                    console.log(`[Ollama] 可用模型: ${names || '无'}`);
+                    console.log(`[${providerName}] 可用模型: ${names || '无'}`);
                 }).catch(() => {});
             } else {
-                console.log('[Ollama] AI 服务未连接，AI 功能已禁用');
+                console.log(`[${providerName}] AI 服务未连接，AI 功能已禁用`);
             }
         }).catch(() => {
             ollamaAvailable = false;
-            console.log('[Ollama] AI 服务检测失败，AI 功能已禁用');
+            console.log(`[${providerName}] AI 服务检测失败，AI 功能已禁用`);
         });
     } else {
         console.log('[AI] 已在配置中禁用，跳过初始化');
