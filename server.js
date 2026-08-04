@@ -478,6 +478,8 @@ let isLeftClickHolding = false;
 let isRightClickHolding = false;
 let flyTimer = null;
 let isFlying = false;
+let keepFollowTarget = null;
+let keepFollowTimer = null;
 let viewer = null;
 let viewerPort = config.viewer_port || 3000;
 let viewerViewDistance = config.viewer_view_distance || 10;
@@ -521,9 +523,11 @@ function createBot(overrides = {}) {
     if (bowTimer) { clearTimeout(bowTimer); bowTimer = null; }
     if (flyTimer) { clearTimeout(flyTimer); flyTimer = null; }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (keepFollowTimer) { clearTimeout(keepFollowTimer); keepFollowTimer = null; }
     if (viewer) { closeViewer(); }
     shouldReconnect = true;
     activeMoveDir = null;
+    keepFollowTarget = null;
     movements = null;
     isFlying = false;
 
@@ -596,6 +600,11 @@ function createBot(overrides = {}) {
     bot.on('playerLeft', (player) => {
         io.emit('bot_event', { type: 'player_left', data: { username: player.username } });
         writeLog('LEAVE', `${player.username} 离开了游戏`);
+        if (keepFollowTarget && keepFollowTarget === player.username) {
+            stopKeepFollow();
+            log('info', `持续跟随目标 ${player.username} 已下线，停止跟随`);
+            io.emit('bot_event', { type: 'info', data: { message: `持续跟随目标 ${player.username} 已下线，停止跟随` } });
+        }
     });
 
     bot.on('kicked', (reason) => {
@@ -866,7 +875,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('restart_bot', () => {
-        io.emit('log', { level: 'info', msg: '正在进程级重启...' });
+        io.emit('log', { level: 'info', msg: '正在重启...' });
         addEvent('info', '进程级重启');
         doProcessRestart();
     });
@@ -1121,6 +1130,33 @@ function stopMove() {
         activeMoveDir = null;
     }
     if (bot) bot.pathfinder.stop();
+}
+
+function stopKeepFollow() {
+    if (keepFollowTimer) {
+        clearTimeout(keepFollowTimer);
+        keepFollowTimer = null;
+    }
+    keepFollowTarget = null;
+}
+
+function keepFollowLoop(targetName, dist) {
+    if (!keepFollowTarget || keepFollowTarget !== targetName) return;
+    if (!bot || !movements) return;
+    const target = bot.players[targetName];
+    if (!target || !target.entity) {
+        stopKeepFollow();
+        log('info', `持续跟随目标 ${targetName} 已下线，停止跟随`);
+        return;
+    }
+    bot.pathfinder.setMovements(movements);
+    bot.pathfinder.goto(new GoalFollow(target.entity, dist))
+        .catch(err => { log('warn', `持续跟随寻路失败: ${err.message}`); })
+        .finally(() => {
+            if (keepFollowTarget === targetName) {
+                keepFollowTimer = setTimeout(() => keepFollowLoop(targetName, dist), 1000);
+            }
+        });
 }
 
 function startMove(dir, duration) {
@@ -1599,7 +1635,7 @@ function executeCommand(line, playerName) {
                 '**jump - 跳跃',
                 '**stop - 停止',
                 '**goto <x> <y> <z> - 寻路',
-                '**follow <玩家> [距离] - 跟随',
+                '**follow <玩家> [距离] [keep] - 跟随，加keep持续跟随',
                 '**attack [时间] - 攻击',
                 '**dig [时间] - 挖掘',
                 '**place - 放置方块',
@@ -1623,6 +1659,7 @@ function executeCommand(line, playerName) {
                 '**itemid - 查看手中物品ID',
                 '**fly [on/off] - 切换飞行模式',
                 '**give <物品名> [数量] - 创造模式获取物品',
+                '**ride <玩家名> - 骑乘玩家（仅可右键骑乘的服务器）',
                 '**ping [地址] - 延迟测试/服务器信息',
                 '**restart - 进程级重启',
             ];
@@ -1654,7 +1691,7 @@ function executeCommand(line, playerName) {
             bot.chat('/' + args.join(' '));
             break;
         case 'restart':
-            reply('正在进程级重启...');
+            reply('正在重启...');
             doProcessRestart();
             break;
         case 'respawn':
@@ -1689,6 +1726,7 @@ function executeCommand(line, playerName) {
             break;
         case 'stop':
             stopMove();
+            stopKeepFollow();
             reply('已停止');
             break;
         case 'goto':
@@ -1712,23 +1750,32 @@ function executeCommand(line, playerName) {
             break;
         case 'follow':
             if (args.length === 0) {
-                reply('用法: **follow <玩家名> [距离]');
+                reply('用法: **follow <玩家名> [距离] [keep]');
                 break;
             }
             {
                 if (!movements) break;
-                const target = bot.players[args[0]];
-                if (!target || !target.entity) { reply(`找不到玩家: ${args[0]}`); break; }
-                const dist = args.length > 1 ? parseFloat(args[1]) : 2;
-                if (args.length > 1 && (isNaN(dist) || dist < 0)) {
+                const targetName = args[0];
+                const target = bot.players[targetName];
+                if (!target || !target.entity) { reply(`找不到玩家: ${targetName}`); break; }
+                const dist = args.length > 1 && args[1].toLowerCase() !== 'keep' ? parseFloat(args[1]) : 2;
+                if (args.length > 1 && args[1].toLowerCase() !== 'keep' && (isNaN(dist) || dist < 0)) {
                     reply('距离必须大于等于0');
                     break;
                 }
+                const isKeep = args.some(a => a.toLowerCase() === 'keep');
                 stopMove();
-                bot.pathfinder.setMovements(movements);
-                bot.pathfinder.goto(new GoalFollow(target.entity, dist))
-                    .then(() => { log('info', '到达目标附近'); reply('到达目标附近'); })
-                    .catch(err => { log('warn', `跟随失败: ${err.message}`); reply(`跟随失败: ${err.message}`); });
+                if (isKeep) {
+                    stopKeepFollow();
+                    keepFollowTarget = targetName;
+                    reply(`开始持续跟随玩家: ${targetName}，距离: ${dist}`);
+                    keepFollowLoop(targetName, dist);
+                } else {
+                    bot.pathfinder.setMovements(movements);
+                    bot.pathfinder.goto(new GoalFollow(target.entity, dist))
+                        .then(() => { log('info', '到达目标附近'); reply('到达目标附近'); })
+                        .catch(err => { log('warn', `跟随失败: ${err.message}`); reply(`跟随失败: ${err.message}`); });
+                }
             }
             break;
         case 'attack':
@@ -1954,6 +2001,24 @@ function executeCommand(line, playerName) {
                 toggleFly(!isFlying);
             }
             reply(isFlying ? '飞行模式已开启' : '飞行模式已关闭');
+            break;
+        case 'ride':
+            if (args.length === 0) {
+                reply('用法: **ride <玩家名>');
+                break;
+            }
+            {
+                const targetName = args[0];
+                bot.chat('/tp ' + targetName);
+                setTimeout(() => {
+                    const targetEntity = bot.nearestEntity(e => e.username === targetName && bot.entity.position.distanceTo(e.position));
+                    if (targetEntity) {
+                        bot.chat('/tp ' + targetName);
+                        bot.activateEntityAt(targetEntity, targetEntity.position);
+                    }
+                }, 2000);
+                reply(`正在骑乘玩家: ${targetName}`);
+            }
             break;
         case 'ping':
             const mc = require('minecraft-protocol');
