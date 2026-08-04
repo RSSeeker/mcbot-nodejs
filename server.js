@@ -37,6 +37,7 @@ class OllamaClient {
         this.conversations = new Map();
         this.autoReplyEnabled = false;
         this.autoReplyTargets = [];
+        this.provider = 'ollama';
     }
 
     async chat(messages, options = {}) {
@@ -126,6 +127,139 @@ class OllamaClient {
                     catch (e) { reject(new Error(`解析 Ollama 响应失败: ${data.substring(0, 200)}`)); }
                 });
             }).on('error', (err) => { reject(new Error(`Ollama 请求失败: ${err.message}`)); });
+        });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ExternalApiClient — OpenAI 兼容外部 API 集成
+// ═══════════════════════════════════════════════════════════════
+class ExternalApiClient {
+    constructor(config = {}) {
+        this.url = config.url || '';
+        this.apiKey = config.api_key || '';
+        this.model = config.model || 'gpt-4o-mini';
+        this.systemPrompt = config.system_prompt ||
+            '你是一个 Minecraft 游戏中的 AI 助手机器人。请用简洁、友好的中文回复。' +
+            '回复尽量简短，控制在游戏聊天栏的长度限制内。';
+        this.timeout = config.timeout || 60000;
+        this.maxHistory = config.max_history || 20;
+        this.conversations = new Map();
+        this.autoReplyEnabled = false;
+        this.autoReplyTargets = [];
+        this.provider = 'external_api';
+    }
+
+    async chat(messages, options = {}) {
+        const model = options.model || this.model;
+        const payload = JSON.stringify({
+            model,
+            messages,
+            temperature: options.temperature || 0.7,
+            top_p: options.top_p || 0.9,
+        });
+        const body = await this._post(payload);
+        return body.choices?.[0]?.message?.content || '';
+    }
+
+    async chatWithTools(messages, tools, options = {}) {
+        const model = options.model || this.model;
+        const payload = JSON.stringify({
+            model,
+            messages,
+            tools,
+            temperature: options.temperature || 0.5,
+            top_p: options.top_p || 0.9,
+        });
+        const body = await this._post(payload);
+        const msg = body.choices?.[0]?.message || {};
+        const toolCalls = msg.tool_calls ? msg.tool_calls.map(tc => ({
+            function: {
+                name: tc.function.name,
+                arguments: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments,
+            },
+        })) : null;
+        return { content: msg.content || null, tool_calls: toolCalls };
+    }
+
+    async generate(prompt, options = {}) {
+        const model = options.model || this.model;
+        const payload = JSON.stringify({
+            model,
+            messages: [
+                { role: 'system', content: this.systemPrompt },
+                { role: 'user', content: prompt },
+            ],
+            temperature: options.temperature || 0.7,
+            top_p: options.top_p || 0.9,
+        });
+        const body = await this._post(payload);
+        return body.choices?.[0]?.message?.content || '';
+    }
+
+    async listModels() {
+        return [{ name: this.model, size: 0 }];
+    }
+
+    async chatWithHistory(sessionId, userMessage, options = {}) {
+        if (!this.conversations.has(sessionId)) this.conversations.set(sessionId, []);
+        const history = this.conversations.get(sessionId);
+        const messages = [{ role: 'system', content: this.systemPrompt }, ...history, { role: 'user', content: userMessage }];
+        const reply = await this.chat(messages, options);
+        history.push({ role: 'user', content: userMessage });
+        history.push({ role: 'assistant', content: reply });
+        if (history.length > this.maxHistory) history.splice(0, history.length - this.maxHistory);
+        return reply;
+    }
+
+    clearHistory(sessionId) { this.conversations.delete(sessionId); }
+    clearAllHistory() { this.conversations.clear(); }
+
+    setAutoReply(enabled, targets = []) { this.autoReplyEnabled = enabled; this.autoReplyTargets = targets; }
+
+    shouldAutoReply(playerName) {
+        if (!this.autoReplyEnabled) return false;
+        if (this.autoReplyTargets.length === 0) return true;
+        return this.autoReplyTargets.includes(playerName);
+    }
+
+    async checkHealth() {
+        if (!this.url) return false;
+        try {
+            const payload = JSON.stringify({
+                model: this.model,
+                messages: [{ role: 'user', content: 'ping' }],
+                max_tokens: 1,
+            });
+            await this._post(payload);
+            return true;
+        } catch { return false; }
+    }
+
+    _post(payload) {
+        return new Promise((resolve, reject) => {
+            const url = new URL(this.url);
+            const client = url.protocol === 'https:' ? require('https') : http;
+            const body = payload;
+            const req = client.request({
+                hostname: url.hostname, port: url.port, path: url.pathname + url.search, method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Content-Length': Buffer.byteLength(body),
+                },
+                timeout: this.timeout,
+            }, (res) => {
+                let data = '';
+                res.on('data', (chunk) => { data += chunk; });
+                res.on('end', () => {
+                    try { resolve(JSON.parse(data)); }
+                    catch (e) { reject(new Error(`解析 API 响应失败: ${data.substring(0, 200)}`)); }
+                });
+            });
+            req.on('error', (err) => { reject(new Error(`API 请求失败: ${err.message}`)); });
+            req.on('timeout', () => { req.destroy(); reject(new Error('API 请求超时')); });
+            req.write(body); req.end();
         });
     }
 }
@@ -394,8 +528,10 @@ function closeLog() {
     }
 }
 
-// ── Ollama AI 客户端 ──
-const ollama = new OllamaClient(config.ollama || {});
+// ── AI 客户端（根据配置选择 Ollama 或外部 API）──
+const ollama = (config.ai_provider === 'external_api' && config.external_api && config.external_api.url)
+    ? new ExternalApiClient(config.external_api || {})
+    : new OllamaClient(config.ollama || {});
 let ollamaAvailable = false;
 
 // ── AI 自主控制器（io 初始化后赋值）──
@@ -656,7 +792,7 @@ function createBot(overrides = {}) {
             host: botOpts.host,
             port: botOpts.port,
         });
-        io.emit('ai_status', { available: ollamaAvailable, model: ollama.model, config_enabled: config.ai_enabled !== false });
+        io.emit('ai_status', { available: ollamaAvailable, model: ollama.model, config_enabled: config.ai_enabled !== false, provider: ollama.provider });
 
         movements = new Movements(bot);
         bot.pathfinder.setMovements(movements);
@@ -829,7 +965,7 @@ io.on('connection', (socket) => {
     log('info', 'Web 客户端已连接');
     socket.emit('status', currentStatus);
     socket.emit('chat_history', chatLog.slice(-50));
-    socket.emit('ai_status', { available: ollamaAvailable, model: ollama.model, config_enabled: config.ai_enabled !== false });
+    socket.emit('ai_status', { available: ollamaAvailable, model: ollama.model, config_enabled: config.ai_enabled !== false, provider: ollama.provider });
 
     // 如果 Bot 已在线，通知新客户端
     if (bot && currentStatus.connected) {
@@ -1665,6 +1801,7 @@ function executeCommand(line, playerName) {
                 '**give <物品名> [数量] - 创造模式获取物品',
                 '**ping [地址] - 延迟测试/服务器信息',
                 '**restart - 进程级重启',
+                '**run <脚本名> [参数] - 运行自定义脚本',
             ];
             if (config.ai_enabled !== false) {
                 helpList.push(
@@ -1696,6 +1833,46 @@ function executeCommand(line, playerName) {
         case 'restart':
             reply('正在重启...');
             doProcessRestart();
+            break;
+        case 'run':
+            if (args.length === 0) {
+                reply('用法: **run <脚本名> [参数...]');
+                break;
+            }
+            {
+                const scriptName = args[0].replace(/\.js$/i, '');
+                const scriptDir = path.join(__dirname, 'scripts');
+                const scriptPath = path.join(scriptDir, scriptName + '.js');
+                if (!fs.existsSync(scriptPath)) {
+                    reply(`脚本不存在: scripts/${scriptName}.js`);
+                    break;
+                }
+                try {
+                    delete require.cache[require.resolve(scriptPath)];
+                    const scriptFn = require(scriptPath);
+                    if (typeof scriptFn !== 'function') {
+                        reply(`脚本 ${scriptName}.js 未导出函数`);
+                        break;
+                    }
+                    reply(`正在执行脚本: ${scriptName}.js`);
+                    const scriptContext = {
+                        reply: (msg) => reply(msg),
+                        args: args.slice(1),
+                        log: (level, msg) => log(level, `[脚本:${scriptName}] ${msg}`),
+                        config,
+                        path: scriptPath,
+                    };
+                    Promise.resolve(scriptFn(bot, scriptContext))
+                        .then(() => { reply(`脚本 ${scriptName}.js 执行完毕`); })
+                        .catch(err => {
+                            log('error', `脚本 ${scriptName}.js 执行失败: ${err.message}`);
+                            reply(`脚本执行失败: ${err.message}`);
+                        });
+                } catch (err) {
+                    log('error', `加载脚本 ${scriptName}.js 失败: ${err.message}`);
+                    reply(`加载脚本失败: ${err.message}`);
+                }
+            }
             break;
         case 'respawn':
             bot._client.write('client_command', { actionId: 0 });

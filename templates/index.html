@@ -1416,6 +1416,7 @@
         });
 
         socket.on('ai_status', (data) => {
+            const providerLabel = data.provider === 'external_api' ? '外部API' : 'Ollama';
             if (data.config_enabled === false) {
                 document.getElementById('aiStatus').textContent = '⛔ AI 已禁用（配置）';
                 document.getElementById('aiStatus').className = 'ai-status offline';
@@ -1423,13 +1424,13 @@
                 document.getElementById('aiInput').disabled = true;
                 document.getElementById('aiInput').placeholder = 'AI 功能已在配置中禁用';
             } else if (data.available) {
-                document.getElementById('aiStatus').textContent = `🟢 AI 就绪 (${data.model || ''})`;
+                document.getElementById('aiStatus').textContent = `🟢 AI 就绪 [${providerLabel}] (${data.model || ''})`;
                 document.getElementById('aiStatus').className = 'ai-status online';
                 aiOnline = true;
                 document.getElementById('aiInput').disabled = false;
                 document.getElementById('aiInput').placeholder = '输入消息与AI对话...';
             } else {
-                document.getElementById('aiStatus').textContent = '⚫ AI 未连接';
+                document.getElementById('aiStatus').textContent = `⚫ AI 未连接 [${providerLabel}]`;
                 document.getElementById('aiStatus').className = 'ai-status offline';
                 aiOnline = false;
                 document.getElementById('aiInput').disabled = false;

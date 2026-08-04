@@ -88,15 +88,24 @@ npm install
     "reply_mode": "whisper",
     "track_players": ["玩家名1", "玩家名2"],
     "trusted_players": ["玩家名1"],
-    "trusted_commands": ["restart", "stop", "cmd", "send"],
+    "trusted_commands": ["restart", "stop", "cmd", "send", "run"],
     "viewer_port": 3000,
     "viewer_view_distance": 10,
     "log_chat_enabled": true,
     "log_dir": "./logs",
     "ai_enabled": true,
+    "ai_provider": "ollama",
     "ollama": {
         "host": "http://localhost:11434",
         "model": "qwen3:8b",
+        "system_prompt": "你是一个 Minecraft 游戏中的 AI 助手机器人。",
+        "timeout": 60000,
+        "max_history": 20
+    },
+    "external_api": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "api_key": "sk-你的API密钥",
+        "model": "gpt-4o-mini",
         "system_prompt": "你是一个 Minecraft 游戏中的 AI 助手机器人。",
         "timeout": 60000,
         "max_history": 20
@@ -139,11 +148,18 @@ npm install
 | `log_chat_enabled` | 是否启用聊天日志记录，默认 true |
 | `log_dir` | 日志文件存放目录，默认 `./logs` |
 | `ai_enabled` | 是否启用 AI 功能，设为 false 可完全关闭 |
+| `ai_provider` | AI 提供商：`"ollama"` 或 `"external_api"`（默认 ollama） |
 | `ollama.host` | Ollama 服务地址 |
 | `ollama.model` | 使用的 AI 模型名称 |
 | `ollama.system_prompt` | AI 系统提示词 |
 | `ollama.timeout` | AI 请求超时（毫秒） |
 | `ollama.max_history` | 每个会话保留的对话历史条数 |
+| `external_api.url` | 外部 API 地址（OpenAI 兼容格式），为空则禁用 |
+| `external_api.api_key` | 外部 API 密钥 |
+| `external_api.model` | 外部 API 模型名称 |
+| `external_api.system_prompt` | 外部 API 系统提示词 |
+| `external_api.timeout` | 外部 API 请求超时（毫秒） |
+| `external_api.max_history` | 外部 API 每个会话保留的对话历史条数 |
 | `keybindings` | Web 键盘绑定配置，值设为 `""` 可禁用该按键 |
 
 ### 启动
@@ -183,6 +199,7 @@ npm start
 | `**cmd <指令>` | 让 Bot 执行 Minecraft 指令 |
 | `**ping [地址:端口]` | Ping 服务器（无参数=当前，有参数=外部服务器） |
 | `**restart` | 进程级重启 Bot |
+| `**run <脚本名> [参数]` | 运行 scripts/ 目录下的自定义 JS 脚本 |
 | `**respawn` | 重生 |
 
 ### 移动与寻路
@@ -267,6 +284,40 @@ npm start
 | `AI_REPLY` | AI 自动回复 |
 | `WHISPER` | Bot 私聊 |
 | `ACTION` | Bot 执行的动作 |
+
+## 自定义脚本
+
+通过 `**run <脚本名>` 命令运行 `scripts/` 目录下的 JS 脚本，实现自定义机器人操控。
+
+### 脚本格式
+
+```js
+// scripts/your_script.js
+module.exports = async function(bot, context) {
+    const { reply, args, log, config } = context;
+
+    // bot — Mineflayer Bot 实例，可调用所有 API
+    // context.reply(msg) — 回复消息给命令发送者
+    // context.args — 脚本参数数组
+    // context.log(level, msg) — 写入服务端日志
+    // context.config — 当前配置对象
+
+    bot.chat('Hello!');
+    reply('脚本执行成功！');
+};
+```
+
+### 内置示例
+
+```bash
+**run example
+**run example 参数1 参数2
+```
+
+### 安全提醒
+
+- 建议将 `run` 加入 `trusted_commands`，仅信任玩家可执行
+- 脚本拥有 `bot` 完整控制权，请勿运行不可信来源的脚本
 
 ## 连接超时
 

@@ -12,15 +12,24 @@
     "reply_mode": "whisper",
     "track_players": ["玩家名1", "玩家名2"],
     "trusted_players": ["玩家名1"],
-    "trusted_commands": ["restart", "stop", "cmd", "send"],
+    "trusted_commands": ["restart", "stop", "cmd", "send", "run"],
     "viewer_port": 3000,
     "viewer_view_distance": 10,
     "log_chat_enabled": true,
     "log_dir": "./logs",
     "ai_enabled": true,
+    "ai_provider": "ollama",
     "ollama": {
         "host": "http://localhost:11434",
         "model": "qwen2.5:latest",
+        "system_prompt": "你是一个 Minecraft 游戏中的 AI 助手机器人。请用简洁、友好的中文回复。回复尽量简短，控制在游戏聊天栏的长度限制内。",
+        "timeout": 60000,
+        "max_history": 20
+    },
+    "external_api": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "api_key": "sk-你的API密钥",
+        "model": "gpt-4o-mini",
         "system_prompt": "你是一个 Minecraft 游戏中的 AI 助手机器人。请用简洁、友好的中文回复。回复尽量简短，控制在游戏聊天栏的长度限制内。",
         "timeout": 60000,
         "max_history": 20
