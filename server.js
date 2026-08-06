@@ -1604,10 +1604,12 @@ function toggleFly(state) {
                 bot.setControlState('jump', false);
             }, 150);
         }
-        // 告知服务器进入飞行状态（1.16+ serverbound abilities 包，bit 0x02=flying）
+        // 告知服务器进入飞行状态（1.16+ serverbound abilities 包）
+        // 必须带完整 flags：仅 flying 位会让服务器认为“无飞行权限”而不承认飞行，导致位置被反复纠正
         try {
-            bot._abilitiesFlags |= 0x02;
-            bot._client.write('abilities', { flags: bot._abilitiesFlags });
+            const flags = gameMode === 'spectator' ? 0x0f : 0x0e; // spectator/creative + flying
+            bot._abilitiesFlags = flags;
+            bot._client.write('abilities', { flags });
         } catch (e) {
             log('warn', `发送飞行状态失败（仅本地飞行）: ${e.message}`);
         }
@@ -1619,14 +1621,20 @@ function toggleFly(state) {
             }
             const jumpHeld = bot.getControlState('jump');
             const sneakHeld = bot.getControlState('sneak');
-            if (jumpHeld && !sneakHeld) {
-                bot.entity.velocity = new Vec3(bot.entity.velocity.x, 0.5, bot.entity.velocity.z);
-            } else if (sneakHeld && !jumpHeld) {
-                bot.entity.velocity = new Vec3(bot.entity.velocity.x, -0.5, bot.entity.velocity.z);
-            } else {
-                bot.entity.velocity = new Vec3(bot.entity.velocity.x, 0, bot.entity.velocity.z);
+            const forwardHeld = bot.getControlState('forward');
+            // 模拟原版创造飞行：水平 10.9 格/秒、垂直 3.9 格/秒
+            // 注意：mineflayer 速度单位是 格/tick（不是格/秒），这里 /20 换算
+            let vx = bot.entity.velocity.x;
+            let vz = bot.entity.velocity.z;
+            if (forwardHeld) {
+                const speed = 10.9 / 20;
+                const cosPitch = Math.cos(bot.entity.pitch);
+                vx = -Math.sin(bot.entity.yaw) * cosPitch * speed;
+                vz = -Math.cos(bot.entity.yaw) * cosPitch * speed;
             }
-        }, 50);
+            const vy = jumpHeld && !sneakHeld ? 3.9 / 20 : (sneakHeld && !jumpHeld ? -3.9 / 20 : 0);
+            bot.entity.velocity = new Vec3(vx, vy, vz);
+        }, 25);
         log('info', '飞行模式已开启 (空格上升，Shift下降)');
         addEvent('fly', 'start');
     } else {
@@ -1636,10 +1644,11 @@ function toggleFly(state) {
         try {
             bot.creative.stopFlying();
         } catch (e) {}
-        // 告知服务器退出飞行状态
+        // 告知服务器退出飞行状态（保留 allowFlying/creativeMode，只清 flying 位）
         try {
-            bot._abilitiesFlags &= ~0x02;
-            bot._client.write('abilities', { flags: bot._abilitiesFlags });
+            const flags = gameMode === 'spectator' ? 0x0d : 0x0c;
+            bot._abilitiesFlags = flags;
+            bot._client.write('abilities', { flags });
         } catch (e) {}
         bot.setControlState('jump', false);
         bot.setControlState('sneak', false);
@@ -2063,7 +2072,8 @@ function executeCommand(line, playerName) {
             break;
         case 'jump':
             bot.setControlState('jump', true);
-            setTimeout(() => bot.setControlState('jump', false), 200);
+            // 飞行中：按住 1 秒上升（网页飞行定时器读取 jump 状态）；地面则短跳
+            setTimeout(() => bot.setControlState('jump', false), isFlying ? 1000 : 200);
             reply('跳跃');
             break;
         case 'stop':
@@ -2187,14 +2197,21 @@ function executeCommand(line, playerName) {
             }
             break;
         case 'sneak':
-            const sneakState = !bot.getControlState('sneak');
-            bot.setControlState('sneak', sneakState);
-            bot._client.write('entity_action', {
-                entityId: bot.entity.id,
-                actionId: sneakState ? 0 : 1,
-                jumpBoost: 0
-            });
-            reply(sneakState ? '已潜行' : '已取消潜行');
+            if (isFlying) {
+                // 飞行中：短暂下降 1 秒，不切换蹲下状态
+                bot.setControlState('sneak', true);
+                setTimeout(() => bot.setControlState('sneak', false), 1000);
+                reply('下降');
+            } else {
+                const sneakState = !bot.getControlState('sneak');
+                bot.setControlState('sneak', sneakState);
+                bot._client.write('entity_action', {
+                    entityId: bot.entity.id,
+                    actionId: sneakState ? 0 : 1,
+                    jumpBoost: 0
+                });
+                reply(sneakState ? '已潜行' : '已取消潜行');
+            }
             break;
         case 'sprint':
             bot.setControlState('sprint', !bot.getControlState('sprint'));
