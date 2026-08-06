@@ -326,16 +326,6 @@ module.exports = async function(bot, context) {
 - 建议将 `run` 加入 `trusted_commands`，仅信任玩家可执行
 - 脚本拥有 `bot` 完整控制权，请勿运行不可信来源的脚本
 
-### NBS 演奏脚本（本地）
-
-`scripts/playnbs.js` 是 NBS 音符方块谱演奏脚本（参考 WeeaxeBot 实现），属于本地文件、不随仓库分发；需安装 `@nbsjs/core` 依赖，并把 `.nbs` 谱面放入项目根目录的 `songs/` 文件夹：
-
-```bash
-**run playnbs <歌曲名.nbs>   # 播放
-**run playnbs stop           # 停止播放并下线小号
-**run playnbs list [关键词]   # 列出/搜索歌曲
-```
-
 ## 连接超时
 
 Bot 启动后 15 秒内未成功连接服务器，会自动断开并提示超时，避免进程卡死。
@@ -345,7 +335,6 @@ Bot 启动后 15 秒内未成功连接服务器，会自动断开并提示超时
 - [mineflayer](https://github.com/PrismarineJS/mineflayer) — Minecraft 协议客户端库
 - [mineflayer-pathfinder](https://github.com/PrismarineJS/mineflayer-pathfinder) — 寻路与移动插件
 - [prismarine-viewer](https://github.com/PrismarineJS/prismarine-viewer) — 基于 Three.js 的 Minecraft 世界渲染器
-- [@nbsjs/core](https://www.npmjs.com/package/@nbsjs/core) — NBS 谱面解析库（供本地演奏脚本使用）
 - [@napi-rs/canvas](https://github.com/Brooooooklyn/canvas) — Rust 实现的 Canvas 库，为 viewer 提供渲染后端
 - [webpack](https://webpack.js.org/) — 模块打包工具，用于构建 viewer 前端资源
 - [express](https://expressjs.com/) — HTTP 服务器
