@@ -21,6 +21,7 @@
   "homepage": "https://github.com/RSSeeker/mcbot-python#readme",
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",
+    "@nbsjs/core": "^6.1.0",
     "buffer": "^6.0.3",
     "express": "^4.22.2",
     "mineflayer": "^4.37.1",

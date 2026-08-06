@@ -1457,24 +1457,6 @@ function handleAction(action, duration) {
             }
             tossNext();
             break;
-        case 'dismount':
-            if (!bot.vehicle) { log('info', '当前未骑乘'); break; }
-            bot.setControlState('sneak', true);
-            bot._client.write('entity_action', {
-                entityId: bot.entity.id,
-                actionId: 0,
-                jumpBoost: 0
-            });
-            setTimeout(() => {
-                bot.setControlState('sneak', false);
-                bot._client.write('entity_action', {
-                    entityId: bot.entity.id,
-                    actionId: 1,
-                    jumpBoost: 0
-                });
-                log('info', '已离开载具');
-            }, 100);
-            break;
         case 'cancel':
             stopMove();
             if (isLeftClickHolding) { try { bot.stopDigging(); } catch (e) {} isLeftClickHolding = false; }
@@ -1796,7 +1778,6 @@ function executeCommand(line, playerName) {
                 '**look [yaw] [pitch] - 绝对视角，**look at <玩家名> - 看向玩家',
                 '**rotate <水平°> [垂直°] - 旋转视角',
                 '**cancel - 取消操作',
-                '**dismount - 下马',
                 '**equip <物品名> <槽位> - 装备',
                 '**unequip <槽位> - 卸下装备',
                 '**unequipall - 卸下全部装备',
@@ -2090,10 +2071,6 @@ function executeCommand(line, playerName) {
         case 'cancel':
             handleAction('cancel');
             reply('已取消');
-            break;
-        case 'dismount':
-            handleAction('dismount');
-            reply('下马');
             break;
         case 'equip':
             if (args.length === 0) {

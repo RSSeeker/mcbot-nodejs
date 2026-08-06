@@ -19,3 +19,10 @@ Thumbs.db
 logs/
 midi/*.mid
 config.json
+
+# 演奏脚本（NBS 播放脚本及其乐器字符映射表）
+scripts/playnbs.js
+scripts/instr_map.js
+
+# 歌曲库
+songs/
