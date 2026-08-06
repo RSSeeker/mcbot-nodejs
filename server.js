@@ -682,6 +682,8 @@ const currentStatus = {
 const chatLog = [];
 const eventLog = [];
 let statusInterval = null;
+// 当前正在运行的脚本（供 **stop 协作式中断）
+let activeScript = null;
 
 function addChatLog(entry) {
     chatLog.push(entry);
@@ -1892,6 +1894,7 @@ function executeCommand(line, playerName) {
                 '**ping [地址] - 延迟测试/服务器信息',
                 '**restart - 进程级重启',
                 '**run <脚本名> [参数] - 运行自定义脚本',
+                '**scriptlist - 列出所有可运行脚本',
             ];
             if (config.ai_enabled !== false) {
                 helpList.push(
@@ -1948,6 +1951,10 @@ function executeCommand(line, playerName) {
                         reply(`脚本 ${scriptName}.js 未导出函数`);
                         break;
                     }
+                    // 新脚本启动时，取消上一个仍在运行的脚本
+                    if (activeScript && !activeScript.cancelled) activeScript.cancelled = true;
+                    const scriptRecord = { name: scriptName, cancelled: false };
+                    activeScript = scriptRecord;
                     reply(`正在执行脚本: ${scriptName}.js`);
                     const scriptContext = {
                         reply: (msg) => reply(msg),
@@ -1955,16 +1962,77 @@ function executeCommand(line, playerName) {
                         log: (level, msg) => log(level, `[脚本:${scriptName}] ${msg}`),
                         config,
                         path: scriptPath,
+                        // 协作式中断支持：脚本用 context.sleep() / context.isCancelled() 即可响应 **stop
+                        get cancelled() { return scriptRecord.cancelled; },
+                        isCancelled() { return scriptRecord.cancelled; },
+                        stop() { scriptRecord.cancelled = true; },
+                        sleep(ms) {
+                            const record = scriptRecord;
+                            const target = Date.now() + Math.max(0, ms || 0);
+                            return new Promise((resolve, reject) => {
+                                const tick = () => {
+                                    if (record.cancelled) {
+                                        const err = new Error('脚本已停止');
+                                        err.__scriptStopped = true;
+                                        return reject(err);
+                                    }
+                                    const remaining = target - Date.now();
+                                    if (remaining <= 0) return resolve();
+                                    setTimeout(tick, Math.min(50, remaining));
+                                };
+                                tick();
+                            });
+                        },
                     };
                     Promise.resolve(scriptFn(bot, scriptContext))
-                        .then(() => { reply(`脚本 ${scriptName}.js 执行完毕`); })
+                        .then(() => {
+                            if (activeScript === scriptRecord) activeScript = null;
+                            if (scriptRecord.cancelled) {
+                                log('info', `脚本 ${scriptName}.js 已停止`);
+                            } else {
+                                reply(`脚本 ${scriptName}.js 执行完毕`);
+                            }
+                        })
                         .catch(err => {
+                            if (activeScript === scriptRecord) activeScript = null;
+                            if (err && err.__scriptStopped) {
+                                log('info', `脚本 ${scriptName}.js 已停止`);
+                                return;
+                            }
                             log('error', `脚本 ${scriptName}.js 执行失败: ${err.message}`);
                             reply(`脚本执行失败: ${err.message}`);
                         });
                 } catch (err) {
                     log('error', `加载脚本 ${scriptName}.js 失败: ${err.message}`);
                     reply(`加载脚本失败: ${err.message}`);
+                }
+            }
+            break;
+        case 'scriptlist':
+            {
+                const scriptDir = path.join(__dirname, 'scripts');
+                let names = [];
+                try {
+                    names = fs.readdirSync(scriptDir)
+                        .filter(f => f.endsWith('.js'))
+                        .filter(f => {
+                            // 只列出真正可运行的脚本（导出函数的）
+                            try {
+                                const mod = require(path.join(scriptDir, f));
+                                return typeof mod === 'function';
+                            } catch (e) {
+                                return false;
+                            }
+                        })
+                        .map(f => f.replace(/\.js$/i, ''))
+                        .sort();
+                } catch (e) {
+                    names = [];
+                }
+                if (names.length === 0) {
+                    reply('scripts/ 目录下没有可运行的脚本');
+                } else {
+                    reply(`可用脚本 (${names.length}): ${names.join(' | ')}`);
                 }
             }
             break;
@@ -2001,7 +2069,25 @@ function executeCommand(line, playerName) {
         case 'stop':
             stopMove();
             stopKeepFollow();
-            reply('已停止');
+            // 停止所有运行中的脚本：flag 机制（farm/tree/mine 等）+ 通用协作式记录
+            if (bot && bot.__scriptFlags) {
+                for (const key of Object.keys(bot.__scriptFlags)) bot.__scriptFlags[key] = true;
+            }
+            if (bot && bot.__nbsSession) {
+                bot.__nbsSession.token++;
+                for (const child of bot.__nbsSession.childBots || []) {
+                    try { if (child && child._client && !child._client.ended) child.quit(); } catch (e) {}
+                }
+                bot.__nbsSession.childBots = [];
+            }
+            if (activeScript) {
+                activeScript.cancelled = true;
+                const stoppedName = activeScript.name;
+                activeScript = null;
+                reply(`已停止脚本: ${stoppedName}.js`);
+            } else {
+                reply('已停止');
+            }
             break;
         case 'goto':
             if (args.length < 3) {

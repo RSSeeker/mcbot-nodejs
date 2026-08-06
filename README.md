@@ -215,7 +215,7 @@ npm start
 |------|------|
 | `**move <方向> [毫秒]` | 移动：forward/back/left/right，默认1000ms |
 | `**jump` | 跳跃 |
-| `**stop` | 停止所有移动 |
+| `**stop` | 停止所有移动和运行中的脚本 |
 | `**goto <x> <y> <z>` | 寻路到目标坐标 |
 | `**follow <玩家> [距离] [keep]` | 跟随指定玩家，加 keep 持续跟随（**stop 停止） |
 | `**fly [on/off]` | 切换飞行模式（创造/旁观模式） |
@@ -307,11 +307,17 @@ module.exports = async function(bot, context) {
     // context.args — 脚本参数数组
     // context.log(level, msg) — 写入服务端日志
     // context.config — 当前配置对象
+    // context.sleep(ms) — 可中断的等待，被 **stop 停止时会立即抛出
+    // context.isCancelled() / context.cancelled — 是否已被 **stop 中断
 
     bot.chat('Hello!');
     reply('脚本执行成功！');
 };
 ```
+
+### 脚本停止
+
+游戏内发送 `**stop` 会停止所有正在运行的脚本。脚本只需使用 `context.sleep()` 代替 `setTimeout`，或在循环里检查 `context.isCancelled()`，即可被 `**stop` 立即中断；不使用这些 API 的脚本会在下一次自身的检查点退出。
 
 ### 内置示例
 
