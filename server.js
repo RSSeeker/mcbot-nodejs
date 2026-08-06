@@ -738,6 +738,11 @@ function createBot(overrides = {}) {
 
     bot = mineflayer.createBot(botOpts);
     bot.loadPlugin(pathfinder);
+    // 跟踪服务器下发的玩家能力状态（用于飞行切换时保留 flags）
+    bot._abilitiesFlags = 0;
+    bot._client.on('abilities', (packet) => {
+        if (packet && typeof packet.flags === 'number') bot._abilitiesFlags = packet.flags;
+    });
 
     let connectTimer = setTimeout(() => {
         if (!currentStatus.connected) {
@@ -1597,6 +1602,13 @@ function toggleFly(state) {
                 bot.setControlState('jump', false);
             }, 150);
         }
+        // 告知服务器进入飞行状态（1.16+ serverbound abilities 包，bit 0x02=flying）
+        try {
+            bot._abilitiesFlags |= 0x02;
+            bot._client.write('abilities', { flags: bot._abilitiesFlags });
+        } catch (e) {
+            log('warn', `发送飞行状态失败（仅本地飞行）: ${e.message}`);
+        }
         if (flyTimer) { clearInterval(flyTimer); flyTimer = null; }
         flyTimer = setInterval(() => {
             if (!bot || !isFlying) {
@@ -1621,6 +1633,11 @@ function toggleFly(state) {
         if (flyTimer) { clearInterval(flyTimer); flyTimer = null; }
         try {
             bot.creative.stopFlying();
+        } catch (e) {}
+        // 告知服务器退出飞行状态
+        try {
+            bot._abilitiesFlags &= ~0x02;
+            bot._client.write('abilities', { flags: bot._abilitiesFlags });
         } catch (e) {}
         bot.setControlState('jump', false);
         bot.setControlState('sneak', false);
