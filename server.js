@@ -481,7 +481,7 @@ const REPLY_MODE = config.reply_mode || 'whisper';
 const TRUSTED_PLAYERS = config.trusted_players || [];
 const TRUSTED_COMMANDS = config.trusted_commands || [];
 
-// ── 聊天日志记录器 ──
+// ── 聊天日志记录器（一天一个文件，单个文件无大小限制）──
 const LOG_CHAT_ENABLED = config.log_chat_enabled !== false;
 const LOG_DIR = path.resolve(__dirname, config.log_dir || './logs');
 let logFilePath = null;
