@@ -119,14 +119,16 @@ class OllamaClient {
         return new Promise((resolve, reject) => {
             const url = new URL(path, this.host);
             const client = url.protocol === 'https:' ? require('https') : http;
-            client.get(url.href, { timeout: this.timeout }, (res) => {
+            const req = client.get(url.href, { timeout: this.timeout }, (res) => {
                 let data = '';
                 res.on('data', (chunk) => { data += chunk; });
                 res.on('end', () => {
                     try { resolve(JSON.parse(data)); }
                     catch (e) { reject(new Error(`解析 Ollama 响应失败: ${data.substring(0, 200)}`)); }
                 });
-            }).on('error', (err) => { reject(new Error(`Ollama 请求失败: ${err.message}`)); });
+            });
+            req.on('error', (err) => { reject(new Error(`Ollama 请求失败: ${err.message}`)); });
+            req.on('timeout', () => { req.destroy(); reject(new Error('Ollama 请求超时')); });
         });
     }
 }
@@ -173,13 +175,19 @@ class ExternalApiClient {
         });
         const body = await this._post(payload);
         const msg = body.choices?.[0]?.message || {};
-        const toolCalls = msg.tool_calls ? msg.tool_calls.map(tc => ({
-            id: tc.id,
-            function: {
-                name: tc.function.name,
-                arguments: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments,
-            },
-        })) : null;
+        const toolCalls = msg.tool_calls ? msg.tool_calls.map(tc => {
+            // 模型偶尔会返回非法 JSON，单条解析失败时降级为空参数，避免整轮决策报废
+            let fnArgs = {};
+            if (typeof tc.function.arguments === 'string') {
+                try { fnArgs = JSON.parse(tc.function.arguments); } catch (e) { fnArgs = {}; }
+            } else if (tc.function.arguments && typeof tc.function.arguments === 'object') {
+                fnArgs = tc.function.arguments;
+            }
+            return {
+                id: tc.id,
+                function: { name: tc.function.name, arguments: fnArgs },
+            };
+        }) : null;
         return { content: msg.content || null, tool_calls: toolCalls };
     }
 
@@ -390,8 +398,8 @@ class AIController {
                     case 'jump': bot.setControlState('jump', true); setTimeout(() => bot.setControlState('jump', false), 200); result = '跳跃'; break;
                     case 'look_at': { const yaw = (fnArgs.yaw || 0) * Math.PI / 180; const pitch = (fnArgs.pitch || 0) * Math.PI / 180; await bot.look(yaw, pitch, true); result = `看向 Yaw=${fnArgs.yaw}° Pitch=${fnArgs.pitch}°`; } break;
                     case 'attack': bot.swingArm('left'); const atkEntity = bot.entityAtCursor(); if (atkEntity) { await bot.attack(atkEntity); result = `攻击了 ${atkEntity.name || atkEntity.username || '实体'}`; } else { result = '攻击(无目标)'; } break;
-                    case 'dig_block': bot.swingArm('left'); const digBlock = bot.blockAtCursor(); if (digBlock && bot.canDigBlock(digBlock)) { await bot.dig(digBlock, false); result = `挖掘了 ${digBlock.displayName || digBlock.name}`; } else { result = '挖掘失败(无法挖掘或准星无方块)'; } break;
-                    case 'place_block': { const placeBlock = bot.blockAtCursor(); if (placeBlock) { const face = this._getTargetFace(placeBlock); await bot.placeBlock(placeBlock, face); result = '放置了方块'; } else { result = '放置失败(无目标)'; } } break;
+                    case 'dig_block': bot.swingArm('left'); const digBlock = bot.blockAtCursor(MAX_REACH); if (digBlock && bot.canDigBlock(digBlock)) { await bot.dig(digBlock, false); result = `挖掘了 ${digBlock.displayName || digBlock.name}`; } else { result = '挖掘失败(无法挖掘或准星无方块)'; } break;
+                    case 'place_block': { const placeBlock = bot.blockAtCursor(MAX_REACH); if (placeBlock) { const face = getTargetFace(placeBlock); await bot.placeBlock(placeBlock, face); result = '放置了方块'; } else { result = '放置失败(无目标)'; } } break;
                     case 'say_chat': { const msg = (fnArgs.message || '').substring(0, 200); if (msg) { bot.chat(msg); result = `发送公聊: ${msg}`; } else { result = '未发送(消息为空)'; } } break;
                     case 'use_item': bot.activateItem(); setTimeout(() => bot.deactivateItem(), 300); result = '使用了手中物品'; break;
                     case 'switch_slot': { const slot = Math.max(1, Math.min(9, fnArgs.slot || 1)); await bot.setQuickBarSlot(slot - 1); result = `切换到槽位 ${slot}`; } break;
@@ -414,22 +422,6 @@ class AIController {
         for (const ctrl of this.activeControls) bot.setControlState(ctrl, false);
         this.activeControls.clear();
         if (this.moveTimer) { clearTimeout(this.moveTimer); this.moveTimer = null; }
-    }
-
-    _getTargetFace(block) {
-        const bot = this.getBot();
-        if (!bot) return new Vec3(0, 1, 0);
-        const dx = -Math.sin(bot.entity.yaw) * Math.cos(bot.entity.pitch);
-        const dy = -Math.sin(bot.entity.pitch);
-        const dz = Math.cos(bot.entity.yaw) * Math.cos(bot.entity.pitch);
-        const bx = block.position.x + 0.5, by = block.position.y + 0.5, bz = block.position.z + 0.5;
-        const offX = (bot.entity.position.x + dx * 6) - bx;
-        const offY = (bot.entity.position.y + bot.entity.height + dy * 6) - by;
-        const offZ = (bot.entity.position.z + dz * 6) - bz;
-        const absX = Math.abs(offX), absY = Math.abs(offY), absZ = Math.abs(offZ);
-        if (absX >= absY && absX >= absZ) return new Vec3(Math.sign(offX), 0, 0);
-        if (absY >= absX && absY >= absZ) return new Vec3(0, Math.sign(offY), 0);
-        return new Vec3(0, 0, Math.sign(offZ));
     }
 
     async _decisionCycle() {
@@ -494,6 +486,14 @@ const LOG_CHAT_ENABLED = config.log_chat_enabled !== false;
 const LOG_DIR = path.resolve(__dirname, config.log_dir || './logs');
 let logFilePath = null;
 let logStream = null;
+let logDateStr = '';
+
+function getLogDateStr(d = new Date()) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
 
 function initLogFile() {
     if (!LOG_CHAT_ENABLED) return;
@@ -501,8 +501,8 @@ function initLogFile() {
         if (!fs.existsSync(LOG_DIR)) {
             fs.mkdirSync(LOG_DIR, { recursive: true });
         }
-        const dateStr = new Date().toISOString().split('T')[0];
-        logFilePath = path.join(LOG_DIR, `chat_${dateStr}.log`);
+        logDateStr = getLogDateStr();
+        logFilePath = path.join(LOG_DIR, `chat_${logDateStr}.log`);
         logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
         writeLog('SYSTEM', '=== 日志记录已启动 ===');
     } catch (e) {
@@ -510,8 +510,21 @@ function initLogFile() {
     }
 }
 
+// 跨天（本地时区零点）时自动切换到新一天的日志文件
+function rolloverLogIfNeeded() {
+    if (!LOG_CHAT_ENABLED || !logStream || !logDateStr) return;
+    const today = getLogDateStr();
+    if (today === logDateStr) return;
+    try { logStream.end(); } catch (e) {}
+    logStream = null;
+    logFilePath = null;
+    initLogFile();
+}
+
 function writeLog(type, message) {
-    if (!LOG_CHAT_ENABLED || !logStream) return;
+    if (!LOG_CHAT_ENABLED) return;
+    rolloverLogIfNeeded();
+    if (!logStream) return;
     try {
         const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
         const line = `[${ts}] [${type}] ${message}\n`;
@@ -589,6 +602,20 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
+// ── 网页控制台访问鉴权（config.web_auth_enabled: false 可关闭）──
+const WEB_AUTH_ENABLED = config.web_auth_enabled !== false;
+const WEB_PASSWORD = (config.web_password || '').trim() || (WEB_AUTH_ENABLED ? require('crypto').randomBytes(8).toString('hex') : '');
+function isWebAuthorized(token) {
+    return WEB_PASSWORD && typeof token === 'string' && token === WEB_PASSWORD;
+}
+
+io.use((socket, next) => {
+    if (!WEB_AUTH_ENABLED) return next();
+    const token = socket.handshake?.auth?.token || socket.handshake?.query?.token;
+    if (isWebAuthorized(token)) return next();
+    next(new Error('unauthorized'));
+});
+
 // ── AI 自主控制器（仅当 config.ai_enabled 时初始化）──
 if (config.ai_enabled !== false) {
     aiController = new AIController(
@@ -604,7 +631,15 @@ if (config.ai_enabled !== false) {
 
 app.use(express.static(path.join(__dirname, 'templates')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'templates', 'index.html')));
-app.get('/api/config', (req, res) => res.json({ ...config, viewer_port: viewerPort }));
+app.get('/api/config', (req, res) => {
+    if (WEB_AUTH_ENABLED && !isWebAuthorized(req.query.token)) {
+        return res.status(401).json({ error: 'unauthorized' });
+    }
+    const cfg = JSON.parse(JSON.stringify(config));
+    if (cfg.external_api) delete cfg.external_api.api_key;
+    if (cfg.bot) delete cfg.bot.password;
+    res.json({ ...cfg, viewer_port: viewerPort });
+});
 
 // ── 全局状态 ──
 let bot = null;
@@ -627,7 +662,11 @@ let viewerPort = config.viewer_port || 3000;
 let viewerViewDistance = config.viewer_view_distance || 10;
 const MAX_RECONNECT_DELAY = 60000;
 const BASE_RECONNECT_DELAY = 3000;
-const LOOK_ROTATION_DELAY_MS = 120;
+// 交互距离（生存模式 4.5 / 创造模式 5）
+const MAX_REACH = 5;
+// 合法的移动/状态控制名（防止非法输入触发 mineflayer assert 崩溃）
+const VALID_CONTROLS = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']);
+function isValidControl(name) { return VALID_CONTROLS.has(name); }
 
 const currentStatus = {
     connected: false,
@@ -643,6 +682,11 @@ const currentStatus = {
 const chatLog = [];
 const eventLog = [];
 let statusInterval = null;
+
+function addChatLog(entry) {
+    chatLog.push(entry);
+    if (chatLog.length > 200) chatLog.splice(0, chatLog.length - 200);
+}
 
 // ── 日志辅助 ──
 function log(level, msg) {
@@ -681,7 +725,11 @@ function createBot(overrides = {}) {
         version: overrides.version || config.server.version || '1.21.4',
         hideErrors: false,
     };
-    const password = overrides.password || config.bot.password || '';
+    // 只有连接配置里的默认服务器时才自动带配置密码，防止把密码发给任意服务器
+    const targetHost = overrides.host || config.server.host;
+    const targetPort = parseInt(overrides.port || config.server.port, 10);
+    const isDefaultServer = targetHost === config.server.host && targetPort === parseInt(config.server.port, 10);
+    const password = overrides.password || (isDefaultServer ? config.bot.password || '' : '');
     if (overrides.viewer_port) viewerPort = parseInt(overrides.viewer_port) || 3000;
     if (overrides.viewer_view_distance) viewerViewDistance = parseInt(overrides.viewer_view_distance) || 10;
     const trackPlayers = overrides.track_players
@@ -718,7 +766,7 @@ function createBot(overrides = {}) {
         try {
             const text = extractPlain(jsonMsg, false);
             if (text) {
-                chatLog.push({ sender: '[系统]', message: text, time: Date.now() / 1000 });
+                addChatLog({ sender: '[系统]', message: text, time: Date.now() / 1000 });
                 io.emit('chat_msg', { sender: '[系统]', message: text });
                 writeLog('SYSTEM', text);
                 processChatCommand(jsonMsg);
@@ -729,7 +777,7 @@ function createBot(overrides = {}) {
     bot.on('chat', (playerName, message) => {
         if (!bot) return;
         if (playerName === bot.username) return;
-        chatLog.push({ sender: playerName, message, time: Date.now() / 1000 });
+        addChatLog({ sender: playerName, message, time: Date.now() / 1000 });
         io.emit('chat_msg', { sender: playerName, message });
         writeLog('CHAT', `${playerName}: ${message}`);
         processChatCommand(message);
@@ -763,6 +811,7 @@ function createBot(overrides = {}) {
         writeLog('DEATH', 'Bot 已死亡，自动重生');
         io.emit('bot_event', { type: 'death', data: {} });
         setTimeout(() => {
+            if (!bot || !bot._client || bot._client.ended) return;
             bot._client.write('client_command', { actionId: 0 });
             log('info', '[AutoRespawn] 已发送重生请求');
         }, 1000);
@@ -1026,7 +1075,7 @@ io.on('connection', (socket) => {
         const msg = (data.message || '').trim();
         if (!msg || !bot) return;
         bot.chat(msg);
-        chatLog.push({ sender: bot.username, message: msg, time: Date.now() / 1000 });
+        addChatLog({ sender: bot.username, message: msg, time: Date.now() / 1000 });
         io.emit('chat_msg', { sender: bot.username, message: msg });
         writeLog('BOT_CHAT', `${bot.username}: ${msg}`);
     });
@@ -1043,7 +1092,7 @@ io.on('connection', (socket) => {
         if (!bot) return;
         const dir = data.direction;
         const dur = data.duration != null ? parseInt(data.duration) : 1000;
-        if (dur <= 0) return;
+        if (!isValidControl(dir) || dur <= 0) return;
         startMove(dir, dur);
     });
 
@@ -1180,6 +1229,7 @@ io.on('connection', (socket) => {
 
     socket.on('set_control', (data) => {
         if (!bot) return;
+        if (!isValidControl(data.control) || typeof data.state !== 'boolean') return;
         bot.setControlState(data.control, data.state);
     });
 
@@ -1197,6 +1247,21 @@ io.on('connection', (socket) => {
     socket.on('request_status', () => {
         if (bot && currentStatus.connected) {
             socket.emit('status', currentStatus);
+        }
+    });
+
+    socket.on('ping', (data = {}) => {
+        if (!bot) return;
+        const addr = (data.addr || '').trim();
+        const replyPing = (msg) => socket.emit('ping_result', { message: msg });
+        if (addr) {
+            const colonIdx = addr.lastIndexOf(':');
+            const host = colonIdx > 0 ? addr.substring(0, colonIdx) : addr;
+            const port = colonIdx > 0 ? parseInt(addr.substring(colonIdx + 1)) || 25565 : 25565;
+            replyPing(`正在 Ping ${host}:${port}...`);
+            pingServer(host, port, replyPing);
+        } else {
+            pingServer(currentStatus.host || config.server.host, currentStatus.port || config.server.port, replyPing);
         }
     });
 
@@ -1303,6 +1368,7 @@ function keepFollowLoop(targetName, dist) {
 
 function startMove(dir, duration) {
     if (!bot) return;
+    if (!isValidControl(dir)) { log('warn', `无效控制: ${dir}`); return; }
     stopMove();
     bot.setControlState(dir, true);
     activeMoveDir = dir;
@@ -1311,28 +1377,21 @@ function startMove(dir, duration) {
     }
 }
 
+// blockAtCursor 的射线结果自带精确的被看中的面（数值枚举），这里转成 placeBlock 需要的向量
+const BLOCK_FACE_VECTORS = [
+    new Vec3(0, -1, 0),  // 0 BOTTOM 底面
+    new Vec3(0, 1, 0),   // 1 TOP    顶面
+    new Vec3(0, 0, -1),  // 2 NORTH  北面
+    new Vec3(0, 0, 1),   // 3 SOUTH  南面
+    new Vec3(-1, 0, 0),  // 4 WEST   西面
+    new Vec3(1, 0, 0),   // 5 EAST   东面
+];
+
 function getTargetFace(block) {
-    const eyePos = bot.entity.position.offset(0, bot.entity.height, 0);
-    const bx = block.position.x + 0.5;
-    const by = block.position.y + 0.5;
-    const bz = block.position.z + 0.5;
-    const yaw = bot.entity.yaw;
-    const pitch = bot.entity.pitch;
-    const dx = -Math.sin(yaw) * Math.cos(pitch);
-    const dy = -Math.sin(pitch);
-    const dz = Math.cos(yaw) * Math.cos(pitch);
-    const dir = new Vec3(dx, dy, dz);
-    const reach = 6;
-    const hit = eyePos.plus(dir.scale(reach));
-    const offX = hit.x - bx;
-    const offY = hit.y - by;
-    const offZ = hit.z - bz;
-    const absX = Math.abs(offX);
-    const absY = Math.abs(offY);
-    const absZ = Math.abs(offZ);
-    if (absX >= absY && absX >= absZ) return new Vec3(Math.sign(offX), 0, 0);
-    if (absY >= absX && absY >= absZ) return new Vec3(0, Math.sign(offY), 0);
-    return new Vec3(0, 0, Math.sign(offZ));
+    if (block && Number.isInteger(block.face) && block.face >= 0 && block.face <= 5) {
+        return BLOCK_FACE_VECTORS[block.face];
+    }
+    return new Vec3(0, 1, 0); // 兜底：默认放顶面
 }
 
 // ═══════════════════════════════════
@@ -1365,7 +1424,7 @@ function handleAction(action, duration) {
             break;
         case 'dig':
             bot.swingArm('left');
-            const digBlock = bot.blockAtCursor();
+            const digBlock = bot.blockAtCursor(MAX_REACH);
             if (digBlock) {
                 const creative = bot.game && bot.game.gameMode === 'creative';
                 if (creative || bot.canDigBlock(digBlock)) {
@@ -1380,7 +1439,7 @@ function handleAction(action, duration) {
             }
             isLeftClickHolding = true;
             bot.swingArm('left');
-            const holdDig = bot.blockAtCursor();
+            const holdDig = bot.blockAtCursor(MAX_REACH);
             if (holdDig) {
                 const creative2 = bot.game && bot.game.gameMode === 'creative';
                 if (creative2 || bot.canDigBlock(holdDig)) {
@@ -1391,13 +1450,11 @@ function handleAction(action, duration) {
             break;
         case 'place':
             (async () => {
-                const placeBlock = bot.blockAtCursor();
+                const placeBlock = bot.blockAtCursor(MAX_REACH);
                 if (!placeBlock) { log('warn', '无目标方块'); return; }
                 try {
                     const face = getTargetFace(placeBlock);
-                    const placePos = placeBlock.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5);
-                    try { bot.lookAt(placePos); } catch (e) {}
-                    await new Promise(r => setTimeout(r, LOOK_ROTATION_DELAY_MS));
+                    // placeBlock 内部会先看向面中心再发包，无需手动 lookAt
                     await bot.placeBlock(placeBlock, face);
                     log('info', `方块已放置`);
                 } catch (err) {
@@ -1405,21 +1462,27 @@ function handleAction(action, duration) {
                 }
             })();
             break;
-        case 'interact':
+        case 'interact': {
             const interEntity = bot.entityAtCursor();
-            if (interEntity) {
+            const interBlock = bot.blockAtCursor(MAX_REACH);
+            // 实体和方块同时命中时，优先更靠近眼睛的那个（避免玩家挡在箱子/门前行为异常）
+            let useEntity = !!interEntity;
+            if (interEntity && interBlock) {
+                const eye = bot.entity.position.offset(0, bot.entity.eyeHeight, 0);
+                const hitPos = interBlock.intersect || interBlock.position.offset(0.5, 0.5, 0.5);
+                useEntity = eye.distanceTo(interEntity.position) <= eye.distanceTo(hitPos);
+            }
+            if (useEntity && interEntity) {
                 if (interEntity.username) {
                     Promise.resolve(bot.activateEntityAt(interEntity, interEntity.position)).catch(err => log('warn', `骑乘失败: ${err.message}`));
                 } else {
                     Promise.resolve(bot.useOn(interEntity)).catch(err => log('warn', `交互失败: ${err.message}`));
                 }
-            } else {
-                const interBlock = bot.blockAtCursor();
-                if (interBlock) {
-                    Promise.resolve(bot.activateBlock(interBlock)).catch(err => log('warn', `交互失败: ${err.message}`));
-                }
+            } else if (interBlock) {
+                Promise.resolve(bot.activateBlock(interBlock)).catch(err => log('warn', `交互失败: ${err.message}`));
             }
             break;
+        }
         case 'use_item':
             bot.activateItem();
             bot.deactivateItem();
@@ -1441,16 +1504,18 @@ function handleAction(action, duration) {
             }
             break;
         case 'drop_all':
+            if (!bot.inventory) break;
             const items = bot.inventory.items();
             if (items.length === 0) { log('info', '背包为空'); break; }
             let idx = 0;
             function tossNext() {
+                if (!bot || !bot.inventory) { log('info', 'Bot 已断开，停止丢出'); return; }
                 const curItems = bot.inventory.items();
                 if (idx >= items.length || curItems.length === 0) { log('info', '丢出全部完成'); return; }
                 const target = curItems.find(i => i.type === items[idx].type);
                 if (target) {
                     bot.swingArm('right');
-                    bot.tossStack(target);
+                    Promise.resolve(bot.tossStack(target)).catch(err => log('warn', `丢出失败: ${err.message}`));
                 }
                 idx++;
                 setTimeout(tossNext, 250);
@@ -1466,7 +1531,7 @@ function handleAction(action, duration) {
             bot.pathfinder.stop();
             break;
         case 'respawn':
-            bot._client.write('client_command', { actionId: 0 });
+            if (bot && bot._client && !bot._client.ended) bot._client.write('client_command', { actionId: 0 });
             break;
     }
 }
@@ -1500,10 +1565,12 @@ function pickBlock() {
         }
     } else {
         const existing = bot.inventory.items().find(i => i.name === item.name);
-        if (existing) {
+        if (existing && existing.slot >= 36 && existing.slot <= 44) {
             bot.setQuickBarSlot(existing.slot - 36);
             log('info', `已切换到: ${item.displayName || item.name}`);
             addEvent('pick_block', item.displayName || item.name);
+        } else if (existing) {
+            log('warn', `"${item.displayName || item.name}" 在背包中但不在快捷栏，请先放入快捷栏再选取`);
         } else {
             log('warn', `背包中没有 "${item.displayName || item.name}"`);
         }
@@ -1707,6 +1774,25 @@ function processChatCommand(rawContent) {
     }
 }
 
+function pingServer(pingHost, pingPort, reply) {
+    const mc = require('minecraft-protocol');
+    mc.ping({ host: pingHost, port: pingPort }, (err, results) => {
+        if (err || !results) {
+            reply(`Ping 失败: ${err ? err.message : '无响应'}`);
+            return;
+        }
+        const motd = (typeof results.description === 'string')
+            ? results.description
+            : results.description?.text || results.description?.extra?.map(e => e.text).join('') || '';
+        const motdClean = motd.replace(/§./g, '').replace(/\n/g, ' ').trim().substring(0, 80);
+        const version = results.version?.name || '?';
+        const online = results.players?.online ?? '?';
+        const max = results.players?.max ?? '?';
+        const latency = results.latency != null ? `${results.latency}ms` : '?';
+        reply(`[${pingHost}] ${motdClean || '无MOTD'} | 版本: ${version} | 在线: ${online}/${max} | 延迟: ${latency}`);
+    });
+}
+
 function executeCommand(line, playerName) {
     const parts = line.split(/\s+/);
     const cmd = parts[0].toLowerCase();
@@ -1828,6 +1914,10 @@ function executeCommand(line, playerName) {
             }
             {
                 const scriptName = args[0].replace(/\.js$/i, '');
+                if (!/^[\w-]+$/.test(scriptName)) {
+                    reply('非法脚本名，只能包含字母/数字/下划线/连字符');
+                    break;
+                }
                 const scriptDir = path.join(__dirname, 'scripts');
                 const scriptPath = path.join(scriptDir, scriptName + '.js');
                 if (!fs.existsSync(scriptPath)) {
@@ -2166,11 +2256,14 @@ function executeCommand(line, playerName) {
             reply(isFlying ? '飞行模式已开启' : '飞行模式已关闭');
             break;
         case 'ping':
-            const mc = require('minecraft-protocol');
             let pingHost, pingPort;
 
             if (args.length > 0) {
                 // **ping <host>[:port]  ping 外部服务器
+                if (TRUSTED_PLAYERS.length > 0 && !TRUSTED_PLAYERS.includes(playerName)) {
+                    reply('权限不足: 外部 Ping 仅信任玩家可用');
+                    break;
+                }
                 const addr = args[0];
                 const colonIdx = addr.lastIndexOf(':');
                 pingHost = colonIdx > 0 ? addr.substring(0, colonIdx) : addr;
@@ -2178,26 +2271,10 @@ function executeCommand(line, playerName) {
                 reply(`正在 Ping ${pingHost}:${pingPort}...`);
             } else {
                 // **ping   ping 当前服务器
-                pingHost = bot.mc_srv.host;
-                pingPort = bot.mc_srv.port;
+                pingHost = currentStatus.host || config.server.host;
+                pingPort = currentStatus.port || config.server.port;
             }
-
-            mc.ping({ host: pingHost, port: pingPort }, (err, results) => {
-                if (err || !results) {
-                    reply(`Ping 失败: ${err ? err.message : '无响应'}`);
-                    return;
-                }
-                const motd = (typeof results.description === 'string')
-                    ? results.description
-                    : results.description?.text || results.description?.extra?.map(e => e.text).join('') || '';
-                const motdClean = motd.replace(/§./g, '').replace(/\n/g, ' ').trim().substring(0, 80);
-                const version = results.version?.name || '?';
-                const online = results.players?.online ?? '?';
-                const max = results.players?.max ?? '?';
-                const latency = results.latency != null ? `${results.latency}ms` : '?';
-
-                reply(`[${pingHost}] ${motdClean || '无MOTD'} | 版本: ${version} | 在线: ${online}/${max} | 延迟: ${latency}`);
-            });
+            pingServer(pingHost, pingPort, reply);
             break;
         case 'ai':
             if (config.ai_enabled === false) {
@@ -2391,7 +2468,7 @@ async function handleAutoReply(message, playerName) {
         if (aiReply) {
             sendSplitMessage(aiReply, playerName);
             const shortReply = sanitizeChat(aiReply).substring(0, 100);
-            chatLog.push({ sender: bot.username, message: `[AI→${playerName}] ${shortReply}`, time: Date.now() / 1000 });
+            addChatLog({ sender: bot.username, message: `[AI→${playerName}] ${shortReply}`, time: Date.now() / 1000 });
             io.emit('chat_msg', { sender: bot.username, message: `[AI→${playerName}] ${shortReply}` });
             writeLog('AI_REPLY', `→ ${playerName}: ${shortReply}`);
         }
@@ -2409,6 +2486,11 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('='.repeat(50));
     console.log('  mcbot 网页控制面板 (纯 Node.js)');
     console.log(`  打开浏览器访问: http://localhost:${PORT}`);
+    if (WEB_AUTH_ENABLED) {
+        console.log(`  网页控制台密码: ${WEB_PASSWORD}${config.web_password ? ' (config.json 的 web_password)' : ' (随机生成，重启后变化)'}`);
+    } else {
+        console.log('  网页控制台鉴权: 已关闭 (config.web_auth_enabled=false)');
+    }
     console.log('='.repeat(50));
     console.log('自动连接 Bot...');
     createBot();

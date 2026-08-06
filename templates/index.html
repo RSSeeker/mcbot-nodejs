@@ -789,9 +789,23 @@
         </div>
     </div>
 
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io();
+        // 网页控制台访问鉴权：密码存 sessionStorage，连接时随 auth 带上；
+        // 服务端关闭鉴权时直接连接成功，不会弹密码框
+        let webToken = sessionStorage.getItem('mcbot_token') || '';
+        const socket = io({ auth: { token: webToken } });
+        socket.on('connect_error', () => {
+            sessionStorage.removeItem('mcbot_token');
+            const t = prompt('请输入网页控制台密码');
+            if (t) {
+                webToken = t.trim();
+                sessionStorage.setItem('mcbot_token', webToken);
+                socket.auth = { token: webToken };
+                socket.connect();
+            }
+        });
+        socket.on('connect', () => { loadConfig(); });
         let connected = false;
         let sneakActive = false;
         let sprintActive = false;
@@ -1180,9 +1194,14 @@
         function doPing() {
             if (!connected) return;
             const addr = document.getElementById('pingAddr').value.trim();
-            const msg = addr ? `**ping ${addr}` : `**ping`;
-            socket.emit('chat', { message: msg });
+            socket.emit('ping', { addr: addr });
+            addLog('info', addr ? `正在 Ping ${addr}...` : '正在 Ping 当前服务器...');
         }
+
+        socket.on('ping_result', (data) => {
+            addLog('info', data.message);
+            addChatMsg('系统', data.message);
+        });
 
         function switchSlot(slot) {
             if (!connected) return;
@@ -1228,7 +1247,7 @@
                 btn.textContent = '👁️ 隐藏画面';
                 placeholder.style.display = 'none';
                 iframe.style.display = '';
-                iframe.src = `http://localhost:${viewerPort}/`;
+                iframe.src = `http://${window.location.hostname}:${viewerPort}/`;
             } else {
                 container.classList.remove('active');
                 btn.classList.remove('active');
@@ -1353,14 +1372,14 @@
             }
         });
 
-        fetch('/api/config')
-            .then(r => r.json())
-            .then(cfg => {
+        function loadConfig() {
+            fetch('/api/config?token=' + encodeURIComponent(webToken))
+                .then(r => { if (!r.ok) throw new Error('unauthorized'); return r.json(); })
+                .then(cfg => {
                 document.getElementById('cfgHost').value = cfg.server?.host || '';
                 document.getElementById('cfgPort').value = cfg.server?.port || 25565;
                 document.getElementById('cfgVersion').value = cfg.server?.version || '1.21.4';
                 document.getElementById('cfgUsername').value = cfg.bot?.username || '';
-                document.getElementById('cfgPassword').value = cfg.bot?.password || '';
                 document.getElementById('cfgPrefix').value = cfg.command_prefix || '**';
                 document.getElementById('cfgViewerPort').value = cfg.viewer_port || 3000;
                 document.getElementById('cfgViewDistance').value = cfg.viewer_view_distance || 10;
@@ -1370,8 +1389,9 @@
                     keyBindings = { ...DEFAULT_KEYBINDINGS, ...cfg.keybindings };
                     buildKeyMap();
                 }
-            })
-            .catch(() => {});
+                })
+                .catch(() => {});
+        }
 
         let aiOnline = false;
 

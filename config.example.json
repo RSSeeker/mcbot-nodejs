@@ -9,6 +9,8 @@
         "password": "登录密码（无密码留空）"
     },
     "command_prefix": "**",
+    "web_auth_enabled": true,
+    "web_password": "你的控制台密码",
     "reply_mode": "whisper",
     "track_players": ["玩家名1", "玩家名2"],
     "trusted_players": ["玩家名1"],

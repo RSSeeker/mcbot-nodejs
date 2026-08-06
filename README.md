@@ -26,16 +26,17 @@ Minecraft Java Edition 网页控制台机器人，**纯 Node.js** 实现，基�
 
 - **Mineflayer 协议代理**：Node.js Mineflayer 处理所有 MC 协议细节，兼容多版本
 - **Web 控制台**：SocketIO 实时 Web 面板，可视化移动控制、视角转动、状态监控
+- **控制台访问鉴权**：网页控制台默认需要密码访问（`web_auth_enabled` / `web_password`），防止未授权控制
 - **画面渲染**：集成 prismarine-viewer，在浏览器中实时渲染机器人第一人称视角画面
 - **聊天监听与命令响应**：监听公聊/私聊消息，响应 `command_prefix` 开头的玩家指令
-- **Ollama AI 集成**：支持 AI 自动回复公聊/私聊（可配置回复模式）、AI 自主控制 Bot 行为（Function Calling）
-- **聊天日志记录**：玩家聊天/系统消息/命令等写入日志文件，可通过 config 开关控制
+- **AI 集成（Ollama / OpenAI 兼容 API）**：支持 AI 自动回复公聊/私聊（可配置回复模式）、AI 自主控制 Bot 行为（Function Calling），提供商可在 config 中切换
+- **聊天日志记录**：玩家聊天/系统消息/命令等按日期每天一个文件写入（本地零点自动切换，无需重启），可通过 config 开关控制
 - **权限控制**：信任玩家白名单，可限制高风险指令仅信任玩家使用
 - **WASD 移动 & 寻路**：方向移动、跳跃、疾跑、坐标寻路、跟随玩家
 - **视角转动**：D-pad 方向键/键盘箭头增量旋转视角，支持绝对角度设置和看向玩家
-- **动作交互**：攻击实体、挖掘方块、放置方块、与方块/实体交互（开门/开箱/骑乘等）、使用物品、潜行、疾跑、丢物品、切格子
+- **动作交互**：攻击实体、挖掘方块、放置方块（射线精确计算放置面）、与方块/实体交互（开门/开箱/骑乘等）、使用物品、潜行、疾跑、丢物品、切格子
 - **背包管理**：背包物品移入快捷栏、装备/卸下物品（支持一键卸下全部）
-- **实体交互**：骑乘、下马、飞行模式（创造/旁观）
+- **实体交互**：骑乘、飞行模式（创造/旁观）
 - **状态查询**：实时查询 Bot 位置/血量/饱食度/手持物品/潜行/疾跑/爬行/骑乘状态
 - **自动恢复**：死亡自动重生、断连自动重连（指数退避）、连接超时检测（15s）、Web 面板一键重启
 
@@ -49,6 +50,8 @@ mcbot-web/
 ├── config.json            # 配置文件
 ├── config.example.json    # 配置文件模板
 ├── package.json           # Node.js 依赖
+├── scripts/
+│   └── example.js         # 自定义脚本示例（**run example 运行）
 ├── logs/                  # 聊天日志目录（自动创建）
 └── README.md
 ```
@@ -85,6 +88,8 @@ npm install
         "password": "登录密码（无密码留空）"
     },
     "command_prefix": "**",
+    "web_auth_enabled": true,
+    "web_password": "你的控制台密码",
     "reply_mode": "whisper",
     "track_players": ["玩家名1", "玩家名2"],
     "trusted_players": ["玩家名1"],
@@ -139,6 +144,8 @@ npm install
 | `bot.username` | Bot 用户名 |
 | `bot.password` | 登录密码（离线模式留空） |
 | `command_prefix` | 游戏内指令前缀，可改为 `!`、`/` 等 |
+| `web_auth_enabled` | 网页控制台是否要求密码，默认 true；设 false 关闭鉴权 |
+| `web_password` | 网页控制台访问密码；留空且鉴权开启时启动随机生成并打印在控制台 |
 | `reply_mode` | AI 回复模式：`whisper`（私聊）或 `public`（公屏 @提问者） |
 | `track_players` | 追踪玩家列表，Bot 会跟随/响应这些玩家 |
 | `trusted_players` | 信任玩家白名单，空数组 `[]` 表示信任所有玩家 |
@@ -170,7 +177,7 @@ npm start
 
 <img src="webui.png" alt="Web 控制面板" width="100%">
 
-启动后在浏览器打开 `http://localhost:5001`，可视控制面板功能包括：
+启动后在浏览器打开 `http://localhost:5001`（首次会提示输入控制台密码，即 config.json 的 `web_password`；关闭鉴权则无需输入），可视控制面板功能包括：
 
 - **连接配置**：网页顶部填写服务器/用户名/密码/画面端口/视距/追踪玩家等
 - **画面渲染**：点击"画面"按钮在浏览器中实时渲染 Bot 第一人称视角
@@ -179,7 +186,7 @@ npm start
 - **视角转动**：独立的视角 D-pad，键盘方向键控制，支持 Yaw/Pitch 精确输入和看向玩家/坐标
 - **状态面板**：实时显示坐标、血量、饱食度、视角、手持物品、潜行/疾跑/爬行/骑乘/飞行状态
 - **物品栏**：快捷栏 1-9 点击切换，一键移入背包物品
-- **动作按钮**：攻击、连击、挖掘、持续挖、放置、交互、使用、长按使用、丢弃、全丢、下马、选取方块、飞行、取消、重生
+- **动作按钮**：攻击、连击、挖掘、持续挖、放置、交互、使用、长按使用、丢弃、全丢、选取方块、飞行、取消、重生
 - **定时动作**：攻击/挖掘/长按使用 + 持续时间，到期自动停止
 - **聊天面板**：实时公聊/私聊/系统消息，支持聊天输入和 Minecraft 指令执行
 - **AI 对话**：与 AI 模型对话，支持模型切换下拉框、自动回复开关、历史清除
@@ -235,7 +242,6 @@ npm start
 | `**sprint` | 切换疾跑状态 |
 | `**drop` | 丢出手持物品 |
 | `**dropall` | 丢出全部物品 |
-| `**dismount` | 离开当前载具 |
 | `**cancel` | 取消所有操作 |
 
 ### 背包与物品
@@ -267,7 +273,7 @@ npm start
 
 ## 聊天日志
 
-启用 `log_chat_enabled` 后，日志文件按日期保存在 `log_dir` 目录下，格式为 `chat_YYYY-MM-DD.log`。
+启用 `log_chat_enabled` 后，日志文件按日期保存在 `log_dir` 目录下，格式为 `chat_YYYY-MM-DD.log`；跨天（本地零点）自动切换新文件，无需重启。
 
 日志记录的事件类型：
 
@@ -316,8 +322,19 @@ module.exports = async function(bot, context) {
 
 ### 安全提醒
 
+- 网页控制台默认需要密码（`web_password`），公网部署时请务必修改默认密码并保持鉴权开启（`web_auth_enabled: true`）
 - 建议将 `run` 加入 `trusted_commands`，仅信任玩家可执行
 - 脚本拥有 `bot` 完整控制权，请勿运行不可信来源的脚本
+
+### NBS 演奏脚本（本地）
+
+`scripts/playnbs.js` 是 NBS 音符方块谱演奏脚本（参考 WeeaxeBot 实现），属于本地文件、不随仓库分发；需安装 `@nbsjs/core` 依赖，并把 `.nbs` 谱面放入项目根目录的 `songs/` 文件夹：
+
+```bash
+**run playnbs <歌曲名.nbs>   # 播放
+**run playnbs stop           # 停止播放并下线小号
+**run playnbs list [关键词]   # 列出/搜索歌曲
+```
 
 ## 连接超时
 
@@ -328,6 +345,7 @@ Bot 启动后 15 秒内未成功连接服务器，会自动断开并提示超时
 - [mineflayer](https://github.com/PrismarineJS/mineflayer) — Minecraft 协议客户端库
 - [mineflayer-pathfinder](https://github.com/PrismarineJS/mineflayer-pathfinder) — 寻路与移动插件
 - [prismarine-viewer](https://github.com/PrismarineJS/prismarine-viewer) — 基于 Three.js 的 Minecraft 世界渲染器
+- [@nbsjs/core](https://www.npmjs.com/package/@nbsjs/core) — NBS 谱面解析库（供本地演奏脚本使用）
 - [@napi-rs/canvas](https://github.com/Brooooooklyn/canvas) — Rust 实现的 Canvas 库，为 viewer 提供渲染后端
 - [webpack](https://webpack.js.org/) — 模块打包工具，用于构建 viewer 前端资源
 - [express](https://expressjs.com/) — HTTP 服务器
