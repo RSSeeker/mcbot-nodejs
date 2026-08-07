@@ -8,14 +8,17 @@
  * 与 playnbs 同一发声机制，但直接播放 .mid，省去中间转换。
  *
  * 用法:
- *   **run playmidi <歌曲.mid> [速度] [模式]    播放（速度 0.25-4，默认 1）
- *   **run playmidi stop                         停止
- *   **run playmidi list                         列出 midi/ 目录下的文件
+ *   **run playmidi <歌曲.mid> [速度] [模式] [notempo]   播放（速度 0.25-4，默认 1）
+ *   **run playmidi stop                                  停止
+ *   **run playmidi list                                  列出 midi/ 目录下的文件
  *
  * 模式（第三参数）:
  *   pitch（默认）: 按音高六八度分配乐器——低音区贝斯、标准区立琴、高音区长笛/铃铛
  *   auto: 按轨道分配——一条轨道一个乐器
  *   0-15: 固定乐器
+ *
+ * notempo（第三或第四参数）: 忽略 MIDI 里的变速事件，按固定 120BPM 播放
+ *   （适合变速数据是导出残留/异常的歌曲，如 Alpha.mid）
  *
  * 注意:
  *   - MIDI 音符无时长概念，note_off 忽略（与 NBS 一致，触发一声）
@@ -41,8 +44,8 @@ function isAlive(bot) {
     return bot && bot.entity && bot._client && !bot._client.ended;
 }
 
-// 构建播放时间轴：tempo 感知，返回 { timeline, tempoChanges }
-function buildTimeline(midiBuf, speed, instMode = 'auto') {
+// 构建播放时间轴：tempo 感知（ignoreTempo=true 时忽略所有变速，按固定 120BPM 计算）
+function buildTimeline(midiBuf, speed, instMode = 'auto', ignoreTempo = false) {
     const smf = midiCommon.parseSMF(midiBuf);
     const division = smf.division;
 
@@ -51,7 +54,7 @@ function buildTimeline(midiBuf, speed, instMode = 'auto') {
     smf.tracks.forEach((events) => {
         const trackInst = instMode === 'pitch' ? undefined : midiCommon.pickTrackInstrument(events);
         for (const ev of events) {
-            if (ev.type === 'meta' && ev.metaType === 0x51 && ev.data.length >= 3) {
+            if (!ignoreTempo && ev.type === 'meta' && ev.metaType === 0x51 && ev.data.length >= 3) {
                 const t = (ev.data[0] << 16) | (ev.data[1] << 8) | ev.data[2];
                 // 非法 tempo（0 或极端值）兜底为默认 120BPM
                 tempoEvents.push({ tick: ev.tick, tempo: (t > 0 && t <= 10000000) ? t : 500000 });
@@ -70,7 +73,7 @@ function buildTimeline(midiBuf, speed, instMode = 'auto') {
     // tick → 秒（tempo 分段累计）
     const ordered = [...uniqueTempi, ...allNotes].sort((a, b) => a.tick - b.tick);
     let seconds = 0, lastTick = 0, tempo = 500000;
-    const tempoChanges = [{ tick: 0, seconds: 0, tempo: 500000 }];
+    const tempoChanges = ignoreTempo ? [] : [{ tick: 0, seconds: 0, tempo: 500000 }];
     for (const ev of ordered) {
         seconds += (ev.tick - lastTick) / division * (tempo / 1e6);
         lastTick = ev.tick;
@@ -115,7 +118,7 @@ module.exports = async function (bot, context) {
         return;
     }
     if (!sub || sub === 'help') {
-reply('用法: **run playmidi <歌曲.mid> [速度] [模式] | stop | list（模式: pitch默认/auto/0-15）');
+reply('用法: **run playmidi <歌曲.mid> [速度] [模式] [notempo] | stop | list（模式: pitch默认/auto/0-15；加 notempo 忽略变速按 120BPM 播放）');
         return;
     }
 
@@ -127,17 +130,23 @@ reply('用法: **run playmidi <歌曲.mid> [速度] [模式] | stop | list（模
     }
     let instMode = 'pitch'; // 默认 pitch=按音高六八度分配 | auto=按轨道 | number=固定乐器
     let fixedInstrument;
-    if (args[2] !== undefined) {
-        if (args[2].toLowerCase() === 'pitch') {
+    let ignoreTempo = false;
+    const modeArg = args[2] ? args[2].toLowerCase() : '';
+    if (modeArg !== '') {
+        if (modeArg === 'notempo' || modeArg === 'ignoretempo' || modeArg === 'none') {
+            ignoreTempo = true;
+        } else if (modeArg === 'pitch') {
             instMode = 'pitch';
-        } else if (args[2].toLowerCase() !== 'auto') {
-            fixedInstrument = parseInt(args[2], 10);
+        } else if (modeArg !== 'auto') {
+            fixedInstrument = parseInt(modeArg, 10);
             if (isNaN(fixedInstrument) || fixedInstrument < 0 || fixedInstrument > 15) {
-                reply('乐器模式: pitch=按音高六八度分配（默认） | auto=按轨道 | 0-15=固定乐器');
+                reply('乐器模式: pitch=按音高六八度分配（默认） | auto=按轨道 | 0-15=固定乐器 | 第三/四参数可加 notempo 忽略变速');
                 return;
             }
         }
     }
+    const tempoArg = args[3] ? args[3].toLowerCase() : '';
+    if (tempoArg === 'notempo' || tempoArg === 'ignoretempo' || tempoArg === 'none') ignoreTempo = true;
 
     if (!fs.existsSync(MIDI_DIR)) fs.mkdirSync(MIDI_DIR, { recursive: true });
     let target = path.resolve(MIDI_DIR, fileName);
@@ -156,14 +165,21 @@ reply('用法: **run playmidi <歌曲.mid> [速度] [模式] | stop | list（模
 
     let timeline, tempoChanges;
     try {
-        ({ timeline, tempoChanges } = buildTimeline(fs.readFileSync(target), speed, instMode));
+        ({ timeline, tempoChanges } = buildTimeline(fs.readFileSync(target), speed, instMode, ignoreTempo));
     } catch (err) {
         reply(`解析失败: ${err.message}`);
         return;
     }
+    if (ignoreTempo) {
+        log('info', '[playmidi] 已忽略变速，按固定 120BPM 播放');
+    }
     const realChanges = tempoChanges ? tempoChanges.filter(c => c.tick > 0) : [];
     if (realChanges.length > 0) {
-        log('info', `[playmidi] 检测到 ${realChanges.length} 处变速（${realChanges.map(c => (60e6 / c.tempo).toFixed(0) + 'BPM').join(' -> ')}）`);
+        const bpmList = realChanges.map(c => (60e6 / c.tempo).toFixed(0) + 'BPM');
+        const bpmStr = bpmList.length > 12
+            ? bpmList.slice(0, 6).join(' -> ') + ' ... -> ' + bpmList.slice(-3).join(' -> ')
+            : bpmList.join(' -> ');
+        log('info', `[playmidi] 检测到 ${realChanges.length} 处变速（${bpmStr}）`);
     }
 
     // 同时刻同乐器同音高的重复音符去重
@@ -179,7 +195,7 @@ reply('用法: **run playmidi <歌曲.mid> [速度] [模式] | stop | list（模
     });
 
     const duration = timeline.length ? timeline[timeline.length - 1].seconds : 0;
-    reply(`开始播放 ${path.basename(target)}（${timeline.length} 个音符，预计 ${duration.toFixed(1)}s，**run playmidi stop 停止）`);
+    reply(`开始播放 ${path.basename(target)}（${timeline.length} 个音符，预计 ${duration.toFixed(1)}s${ignoreTempo ? '，已忽略变速' : ''}，**run playmidi stop 停止）`);
     try { bot.chat('/piano keyboard unicode'); } catch (e) {}
 
     bot.__scriptFlags[FLAG_KEY] = false;

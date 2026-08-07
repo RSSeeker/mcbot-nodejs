@@ -1793,9 +1793,50 @@ function isSolid(bot, pos) {
     return b.shapes && b.shapes.length > 0;
 }
 
-// bot 是 1 格宽 2 格高：脚底格和头顶格都要可通行
+// 检查 bot 的实际碰撞箱（0.6 宽 × 1.8 高，脚底中心在 pos）是否与任何方块形状相交。
+// 这样 1 格高 / 半格高 / 1.5 格高的洞或空隙，以及部分高度的方块（台阶等）都会被正确判为不可通过。
+function bodyClear(bot, pos) {
+    const half = 0.3;
+    const minX = pos.x - half, maxX = pos.x + half;
+    const minY = pos.y, maxY = pos.y + 1.8;
+    const minZ = pos.z - half, maxZ = pos.z + half;
+    const x0 = Math.floor(minX), x1 = Math.floor(maxX);
+    const y0 = Math.floor(minY), y1 = Math.floor(maxY);
+    const z0 = Math.floor(minZ), z1 = Math.floor(maxZ);
+    for (let x = x0; x <= x1; x++) {
+        for (let y = y0; y <= y1; y++) {
+            for (let z = z0; z <= z1; z++) {
+                const b = bot.blockAt(new Vec3(x, y, z));
+                if (!b) return false;
+                // 打开的门 / 打开的活板门：可穿过
+                if ((b.name.endsWith('_door') || b.name.endsWith('_trapdoor')) && typeof b.getProperties === 'function') {
+                    try {
+                        const props = b.getProperties();
+                        if (props && props.open === true) continue;
+                    } catch (e) {}
+                }
+                if (!b.shapes || b.shapes.length === 0) continue;
+                for (const s of b.shapes) {
+                    if (!s || s.length < 6) continue;
+                    const bx1 = x + s[0], by1 = y + s[1], bz1 = z + s[2];
+                    const bx2 = x + s[3], by2 = y + s[4], bz2 = z + s[5];
+                    if (bx1 < maxX && bx2 > minX && by1 < maxY && by2 > minY && bz1 < maxZ && bz2 > minZ) return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// bot 是 0.6 宽 1.8 高：脚底中心在 pos 时整身不碰任何方块形状才可通行
 function canOccupy(bot, pos) {
-    return !isSolid(bot, pos) && !isSolid(bot, pos.offset(0, 1, 0));
+    return bodyClear(bot, pos);
+}
+
+// A* 格子判定：以格子中心（x+0.5, z+0.5、脚底在 y）放 bot 整身检查，
+// 避免整数坐标贴边导致 1 格宽走廊被误判不可通过
+function canOccupyCell(bot, x, y, z) {
+    return bodyClear(bot, new Vec3(x + 0.5, y, z + 0.5));
 }
 
 // 脚下到地面的距离（0 = 脚下方块就是地面；Infinity = 下方没有地面/未加载）
@@ -1812,7 +1853,8 @@ function distToGround(bot, pos, maxScan = 16) {
 function lineClear(bot, from, to) {
     const dist = from.distanceTo(to);
     const steps = Math.max(1, Math.ceil(dist / 0.5));
-    for (let i = 1; i < steps; i++) {
+    // 起点不检查（bot 可能正卡在墙里），终点也要检查
+    for (let i = 1; i <= steps; i++) {
         const t = i / steps;
         const p = from.plus(to.minus(from).scaled(t));
         if (!canOccupy(bot, p)) return false;
@@ -1917,7 +1959,22 @@ function aStar3D(bot, start, goal) {
             if (nx < minX || nx > maxX || ny < minY || ny > maxY || nz < minZ || nz > maxZ) continue;
             const nkey = keyOf(nx, ny, nz);
             if (closed.has(nkey)) continue;
-            if (!canOccupy(bot, new Vec3(nx, ny, nz))) continue;
+            // 斜向移动禁止从墙角/洞边挤过去：单轴中间格也必须可通行
+            if (d[0] !== 0 && d[1] !== 0 && d[2] !== 0) {
+                if (!canOccupyCell(bot, nx, y, z)) continue;
+                if (!canOccupyCell(bot, x, ny, z)) continue;
+                if (!canOccupyCell(bot, x, y, nz)) continue;
+            } else if (d[0] !== 0 && d[1] !== 0) {
+                if (!canOccupyCell(bot, nx, y, z)) continue;
+                if (!canOccupyCell(bot, x, ny, z)) continue;
+            } else if (d[0] !== 0 && d[2] !== 0) {
+                if (!canOccupyCell(bot, nx, y, z)) continue;
+                if (!canOccupyCell(bot, x, y, nz)) continue;
+            } else if (d[1] !== 0 && d[2] !== 0) {
+                if (!canOccupyCell(bot, x, ny, z)) continue;
+                if (!canOccupyCell(bot, x, y, nz)) continue;
+            }
+            if (!canOccupyCell(bot, nx, ny, nz)) continue;
             const step = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
             const tentG = g + step;
             if (tentG < (gScore.get(nkey) ?? Infinity)) {
@@ -1992,8 +2049,18 @@ async function flyGotoLoop(token, target, reply) {
 
     let vx = 0, vy = 0, vz = 0;
     let flyPath = null, flyWpIdx = 0, lastPathTime = 0, lastPathGoal = null;
-    let lastMovePos = null, lastMoveTime = 0, noMoveCount = 0, backoffUntil = 0;
+    let lastMovePos = null, lastMoveTime = 0, noMoveCount = 0;
     let flyTimer = null;
+    let lastTpTime = 0;
+    const TP_INTERVAL = 500;
+
+    function tryTp(reason) {
+        const now = Date.now();
+        if (now - lastTpTime < TP_INTERVAL) return;
+        lastTpTime = now;
+        log('info', `[空间寻路] ${reason}，尝试 /tp ${target.x} ${target.y} ${target.z}`);
+        botRef.chat(`/tp ${target.x} ${target.y} ${target.z}`);
+    }
 
     try {
         flyTimer = setInterval(() => {
@@ -2029,21 +2096,10 @@ async function flyGotoLoop(token, target, reply) {
                 lastMoveTime = now;
             }
             if (noMoveCount >= 2) {
-                log('warn', '[空间寻路] 卡住，后退 3 秒后重新规划');
+                log('warn', '[空间寻路] 卡住，直接 /tp 到目标');
+                tryTp('卡住');
                 flyPath = null;
                 noMoveCount = 0;
-                backoffUntil = Date.now() + 3000;
-            }
-            if (Date.now() < backoffUntil) {
-                const h = Math.hypot(delta.x, delta.z);
-                if (h > 0.1) {
-                    vx = Math.max(-2.5, Math.min(2.5, -delta.x / h * 2.5));
-                    vz = Math.max(-2.5, Math.min(2.5, -delta.z / h * 2.5));
-                } else {
-                    vx = 0; vz = 0;
-                }
-                vy = 0;
-                await sleep(100);
                 continue;
             }
 
@@ -2122,11 +2178,9 @@ async function flyFollowLoop(token, targetName, keepDist, reply) {
     let flyTimer = null;
     let vx = 0, vy = 0, vz = 0;
     let flyPath = null, flyWpIdx = 0, lastPathTime = 0, lastPathGoal = null;
-    let lastMovePos = null, lastMoveTime = 0, noMoveCount = 0, backoffUntil = 0;
-    let backoffCount = 0; // 连续后退脱困失败的次数（多次失败则 /tp）
-    let lastBackoffDist = Infinity; // 上次后退时与玩家的距离（用于判断是否真正接近）
+    let lastMovePos = null, lastMoveTime = 0, noMoveCount = 0;
     let lastTpTime = 0, tpAttempts = 0, tpWarned = false;
-    const TP_INTERVAL = 10000;
+    const TP_INTERVAL = 500;
 
     const gameMode = botRef.game ? botRef.game.gameMode : '';
     const canFly = gameMode === 'creative' || gameMode === 'spectator';
@@ -2220,14 +2274,10 @@ async function flyFollowLoop(token, targetName, keepDist, reply) {
                     vx = 0; vz = 0;
                     vy = axisY(dy);
                     noMoveCount = 0;
-                    backoffCount = 0;
                     flyPath = null;
                 } else {
                     const now = Date.now();
                     const goal = anchor.clone().floored();
-
-                    // 只有真正接近玩家（比上次后退时近 2 格以上）才重置后退计数
-                    if (dist < lastBackoffDist - 2) backoffCount = 0;
 
                     // 卡住检测：3 秒净位移 < 0.5
                     if (!lastMovePos) {
@@ -2241,30 +2291,10 @@ async function flyFollowLoop(token, targetName, keepDist, reply) {
                         lastMoveTime = now;
                     }
                     if (noMoveCount >= 2) {
-                        backoffCount++;
-                        lastBackoffDist = dist;
-                        log('warn', `[跟随] 卡住（可能撞到角落/天花板），后退 3 秒重新寻路（第 ${backoffCount} 次）`);
-                        if (backoffCount >= 3) {
-                            backoffCount = 0;
-                            log('warn', '[跟随] 多次后退仍卡住，尝试 /tp 到玩家');
-                            tryTp('多次后退仍未脱困');
-                        }
+                        log('warn', '[跟随] 卡住，直接 /tp 到玩家');
+                        tryTp('卡住');
                         flyPath = null;
                         noMoveCount = 0;
-                        backoffUntil = Date.now() + 3000;
-                        continue;
-                    }
-                    if (Date.now() < backoffUntil) {
-                        const h = Math.hypot(dx, dz);
-                        if (h > 0.1) {
-                            vx = Math.max(-2.5, Math.min(2.5, -dx / h * 2.5));
-                            vz = Math.max(-2.5, Math.min(2.5, -dz / h * 2.5));
-                        } else {
-                            vx = 0; vz = 0;
-                        }
-                        vy = 0;
-                        botRef.setControlState('forward', false);
-                        await sleep(300);
                         continue;
                     }
 
