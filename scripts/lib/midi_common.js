@@ -1,32 +1,32 @@
 'use strict';
 
-// MIDI ?????SMF ?? + ??/???? + ???????
-// ? midi2nbs.js / playmidi.js ??
+// MIDI 公用库：SMF 解析 + 乐器/音高映射 + 字符表
+// 供 midi2nbs.js / playmidi.js 使用
 
-// ?????????????? NBS key 0-83??? MIDI 21-104?
+// 音符盒 key 范围：NBS key 0-83 对应 MIDI 音高 21-104
 const MIN_PITCH = 54;
 const MAX_PITCH = 78;
 // MIDI -> NBS key offset (MIDI 21 = A0 = NBS key 0)
 const NBS_KEY_BASE = 21;
 
-// ???? ? ???? MIDI ?? 0-127????? NBS ?????
+// 按音高分段：把 MIDI 音高 0-127 分配到 NBS 乐器
 const PITCH_BANDS = [
-    { min: 0,   max: 47,  instrument: 1 },  // ????? (0-47) -> ??
-    { min: 48,  max: 71,  instrument: 0 },  // ?????? (48-71) -> ??
-    { min: 72,  max: 95,  instrument: 6 },  // ?????? (72-95) -> ??
-    { min: 96,  max: 127, instrument: 7 },  // ????? (96-127) -> ??
+    { min: 0,   max: 47,  instrument: 1 },  // 低音区 (0-47) -> 贝斯
+    { min: 48,  max: 71,  instrument: 0 },  // 标准区 (48-71) -> 竖琴
+    { min: 72,  max: 95,  instrument: 6 },  // 高音区 (72-95) -> 长笛
+    { min: 96,  max: 127, instrument: 7 },  // 极高音 (96-127) -> 铃铛
 ];
 
-// ??? ? ???MIDI ???????????
+// 鼓通道：按 MIDI 鼓音高映射到 NBS 乐器
 const DRUM_MAP = {
-    35: 2, 36: 2,   // ?? ? basedrum
-    38: 3, 40: 3,   // ?? ? snare
-    42: 4, 44: 4, 46: 4, // ??/?? ? hat
-    49: 9, 51: 9, 57: 9, // ?? ? xylophone
-    39: 5, 41: 5,   // ??/???? ? guitar
+    35: 2, 36: 2,   // 大鼓 -> basedrum
+    38: 3, 40: 3,   // 小鼓 -> snare
+    42: 4, 44: 4, 46: 4, // 踩镲/镲 -> hat
+    49: 9, 51: 9, 57: 9, // 木琴 -> xylophone
+    39: 5, 41: 5,   // 手拍/军鼓边 -> guitar
 };
 
-// ??????????? SMF??? MIDI ?????? ???????????
+// 自含的 SMF 解析器：不依赖外部 MIDI 库，可直接读 .mid 文件
 
 class ByteReader {
     constructor(buf) {
@@ -53,13 +53,13 @@ class ByteReader {
 
 function parseSMF(buffer) {
     const r = new ByteReader(buffer);
-    if (r.readBytes(4).toString('ascii') !== 'MThd') throw new Error('????? MIDI ????? MThd?');
+    if (r.readBytes(4).toString('ascii') !== 'MThd') throw new Error('不是有效的 MIDI 文件：缺少 MThd 头');
     const hdrLen = r.readU32();
     const format = r.readU16();
     const ntrks = r.readU16();
     const division = r.readU16();
     r.pos += hdrLen - 6;
-    if (division & 0x8000) throw new Error('??? SMPTE ???????? PPQ');
+    if (division & 0x8000) throw new Error('不支持 SMPTE 时间码，请使用 PPQ 格式');
 
     const tracks = [];
     for (let t = 0; t < ntrks; t++) {
@@ -111,7 +111,7 @@ function parseSMF(buffer) {
     return { format, division, tracks };
 }
 
-// ??????????? ???? ???????????
+// 把音高折叠到音符盒可发声范围（F#3~F#5，33-57）
 
 function foldPitch(p) {
     while (p < MIN_PITCH) p += 12;
@@ -130,7 +130,7 @@ function instrumentForDrum(p) {
     return DRUM_MAP[p] ?? 3;
 }
 
-// ???????auto=????????=??????????????
+// 选择乐器：鼓通道优先，其次固定乐器/轨道乐器，最后按音高分段
 function pickInstrument(channel, pitch, fixedInstrument, trackInstrument) {
     if (channel === 9) return instrumentForDrum(pitch);
     if (typeof fixedInstrument === "number") return fixedInstrument;
@@ -151,11 +151,11 @@ function programToInstrument(program) {
     return PROGRAM_TO_INSTRUMENT[program] ?? 0;
 }
 
-// ---- ??????????????????????????? 6 ????----
-// ???? S = NBS key?MIDI-21??????? key ??? 33-57?????????????
-//   sound = key + offset?offset: ??-24 ??-12 ??0 ??+12 ??+24
-const SOUND_KEY_MIN = 9;   // F#1??????
-const SOUND_KEY_MAX = 81;  // F#7??????
+// ---- 六八度乐器分配：MIDI 音高映射到音符盒 key（33-57），按音域分给不同乐器 ----
+// 先算 S = NBS key（MIDI 音高 - 21），再把 key 折叠到 33-57 范围内，并按乐器偏移
+//   sound = key + offset；offset：贝斯 -24、吉他 -12、竖琴 0、长笛 +12、铃铛 +24
+const SOUND_KEY_MIN = 9;   // F#1 最低可发声
+const SOUND_KEY_MAX = 81;  // F#7 最高可发声
 const INSTRUMENT_OFFSET = { 0: 0, 1: -24, 5: -12, 6: 12, 7: 24 };
 
 function foldSoundKey(S) {
@@ -164,12 +164,12 @@ function foldSoundKey(S) {
     return S;
 }
 
-// ?????????????????????????/????????/??
+// 根据折叠后的 key 分配乐器：标准区竖琴、低音区贝斯、高音区长笛/铃铛
 function instrumentForKey(S) {
-    if (S >= 33 && S <= 57) return 0; // ?? F#3-F#5
-    if (S >= 9 && S < 33) return 1;   // ?? F#1-F#3??2??????????
-    if (S > 57 && S <= 69) return 6;  // ?? F#5-F#6
-    if (S > 69 && S <= 81) return 7;  // ?? F#6-F#7
+    if (S >= 33 && S <= 57) return 0; // 标准区 F#3-F#5（竖琴）
+    if (S >= 9 && S < 33) return 1;   // 低音区 F#1-F#3，低 2 个八度（贝斯）
+    if (S > 57 && S <= 69) return 6;  // 高音区 F#5-F#6（长笛）
+    if (S > 69 && S <= 81) return 7;  // 极高音 F#6-F#7（铃铛）
     return 0;
 }
 
@@ -178,14 +178,14 @@ function keyForInstrument(instrument, S) {
     return Math.max(33, Math.min(57, S - offset));
 }
 
-// MIDI ?? -> { instrument, key }?key ?? 33-57????? 6 ????
+// MIDI 音高 -> { instrument, key }；key 折叠到 33-57，覆盖约 6 个八度
 function assignSixOctave(midiPitch) {
     const S = foldSoundKey(midiPitch - 21);
     const instrument = instrumentForKey(S);
     return { instrument, key: keyForInstrument(instrument, S) };
 }
 
-// ???????????????pitch ???????auto/?????/????
+// 统一解析音符：鼓通道按鼓映射；pitch 模式走六八度分配；auto/固定/轨道乐器走普通映射
 function resolveNote(channel, midiPitch, instMode, fixedInstrument, trackInstrument) {
     if (channel === 9) {
         return { instrument: instrumentForDrum(midiPitch), key: foldPitch(midiPitch) - NBS_KEY_BASE };
@@ -231,7 +231,7 @@ const instrCharMap = {
   15: "喀喁喂喃善喅喆喇喈喉喊喋喌喍喎喏喐喑喒喓喔喕喖喗喘喙喚喛喜喝喞喟喠喡喢喣喤喥喦喧喨喩喪喫喬喭單喯喰喱喲喳喴喵営喷喸喹喺喻喼喽喾喿嗀嗁嗂嗃嗄嗅嗆嗇嗈嗉嗊嗋嗌嗍嗎嗏嗐嗑嗒嗓嗔嗕嗖嗗".split('')
 };
 
-// ?? ? Unicode ??????? playnbs.js ?????
+// 乐器 + key -> Unicode 字符（与 playnbs.js 同款字符表）
 function charForNote(instrument, key) {
     return (instrCharMap[instrument] || [])[key + 4] || '';
 }
