@@ -15,9 +15,9 @@ function isAlive(target) {
 
 // 发包频率限制器：每个 bot 每秒最多发 maxPerSec 个 tab_complete 包，
 // 防止触发服务端发包频率限制（You are sending too many packets!）被踢
-const MAX_PACKETS_PER_SEC = 40;
-// 暂时关闭发包限速（改回 true 恢复）
-const RATE_LIMIT_ENABLED = false;
+const MAX_PACKETS_PER_SEC = 70;
+// 发包限速开关（false 关闭）
+const RATE_LIMIT_ENABLED = true;
 function makeRateLimiter(maxPerSec = MAX_PACKETS_PER_SEC) {
     if (!RATE_LIMIT_ENABLED) {
         // 不限速：每次调用立即返回

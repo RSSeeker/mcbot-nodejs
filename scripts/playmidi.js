@@ -43,8 +43,6 @@ const MAX_BOTS = 10;
 
 const MIDI_DIR = path.resolve(__dirname, '..', 'midi');
 const FLAG_KEY = 'playmidi';
-// 单个 bot 同时承担的并发音符上限（与 playnbs 一致）
-const POLYPHONY_THRESHOLD = 2.3;
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -247,14 +245,10 @@ reply('用法: **run playmidi <歌曲.mid> | [1bot] | <速度> | <模式> | note
         bucketCounts.set(b, (bucketCounts.get(b) || 0) + 1);
     }
     const maxWindow = bucketCounts.size ? Math.max(...bucketCounts.values()) : 0;
-    const avgWindow = duration > 0 ? timeline.length / (duration / WINDOW) : 0;
     const peakPerSec = maxWindow / WINDOW;
-    const avgPerSec = avgWindow / WINDOW;
-    const needByRate = Math.ceil(Math.max(peakPerSec, avgPerSec) / MAX_PACKETS_PER_SEC);
-    const needByPoly = Math.ceil(maxWindow / POLYPHONY_THRESHOLD);
-    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, needByRate, needByPoly));
+    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, Math.ceil(peakPerSec / MAX_PACKETS_PER_SEC)));
     if (singleBot) log('info', '[playmidi] 已强制单 bot 演奏');
-    else if (botNum > 1) log('info', `[playmidi] 峰值每 100ms ${maxWindow} 个音符（${peakPerSec.toFixed(0)} 音符/秒），需要 ${botNum} 个 bot`);
+    else if (botNum > 1) log('info', `[playmidi] 最密处 ${peakPerSec.toFixed(0)} 音符/秒，每 bot 上限 ${MAX_PACKETS_PER_SEC} 包/秒，需要 ${botNum} 个 bot`);
 
     // 先退出旧小号，再串行创建新小号（失败不影响主 bot 播放）
     quitPlaymidiChildren(bot);

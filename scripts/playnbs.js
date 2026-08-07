@@ -49,8 +49,6 @@ const instrCharMap = {
 
 const SONG_DIR = path.resolve(__dirname, '..', 'songs');
 const PLAY_PREFIX = '/// ';
-// 单个 bot 每 tick 最多承担的音符数（超过就开小号，参照 WeeaxeBot）
-const POLYPHONY_THRESHOLD = 2.3;
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -171,17 +169,13 @@ async function playNBS(bot, session, filePath, reply, log, config, singleBot = f
     // 预处理音符
     const rows = buildTabList(song);
     const totalNotes = rows.reduce((sum, row) => sum + row.length, 0);
-    const avgNotes = totalNotes / Math.max(1, songLength);
     const maxPerTick = Math.max(...rows.map((r) => r.length), 0);
 
-    // 需要几个 bot：按最密 tick 的多音度 + 最密处的发包速率（每 bot 限速）算，兼顾均值，上限 MAX_BOTS
-    const needByPoly = Math.ceil(maxPerTick / POLYPHONY_THRESHOLD);
+    // 需要几个 bot：仅按最密处的发包速率算（每 bot 最快 490 包/7s ≈ 70 包/秒），上限 MAX_BOTS
     const ticksPerSec = 1000 / songSpeed;
     const peakPerSec = maxPerTick * ticksPerSec;
-    const avgPerSec = avgNotes * ticksPerSec;
-    const needByRate = Math.ceil(Math.max(peakPerSec, avgPerSec) / MAX_PACKETS_PER_SEC);
-    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, needByPoly, needByRate));
-    log('info', `音符总数 ${totalNotes}，平均每 tick ${avgNotes.toFixed(2)} 个，峰值 ${maxPerTick} 个（${peakPerSec.toFixed(0)} 音符/秒），需要 ${botNum} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
+    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, Math.ceil(peakPerSec / MAX_PACKETS_PER_SEC)));
+    log('info', `音符总数 ${totalNotes}，最密处 ${peakPerSec.toFixed(0)} 音符/秒，每 bot 上限 ${MAX_PACKETS_PER_SEC} 包/秒，需要 ${botNum} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
 
     // 串行创建小号（各自独立连接/注册），失败不影响主 bot 播放
     if (botNum > 1) {

@@ -20,5 +20,10 @@ logs/
 midi/*.mid
 config.json
 
+# 发包速率测试脚本（仅本地测试用，不入库）
+scripts/ratetest.js
+scripts/gen_ratetest.js
+scripts/lib/midi_gen.js
+
 # 歌曲库
 songs/
