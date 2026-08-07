@@ -1,0 +1,339 @@
+'use strict';
+
+/**
+ * ⚠️ 仅 Weeaxe 服务器（mc.weeaxe.cn）可用：依赖服务器钢琴插件（/piano keyboard unicode + tab_complete 符号触发）
+ * NBS 音符方块谱演奏脚本
+ *
+ * 参照 WeeaxeBot-main/index.js 的演奏实现移植：
+ *   1. 用 @nbsjs/core 解析 .nbs 谱面文件
+ *   2. 把「乐器 + 音高」映射成 Unicode 字符（scripts/instr_map.js，原样提取自 WeeaxeBot）
+ *   3. 通过 tab_complete 数据包发送 "/// 字符"，触发服务器钢琴插件的 unicode 键盘发声
+ *   4. 按谱面曲速逐 tick 播放，平均音符多时自动多开小号分担（多音响度）
+ *
+ * 用法（游戏内聊天，经 **run 调用）：
+ *   **run playnbs <歌曲名.nbs>      播放 songs/ 目录下的歌曲（可省略 .nbs 后缀）
+ *   **run playnbs stop              停止当前播放并下线小号
+ *   **run playnbs list [关键词]     列出 / 搜索歌曲
+ *
+ * 歌曲文件放到项目根目录的 songs/ 文件夹下。
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { fromArrayBuffer } = require('@nbsjs/core');
+const instrCharMap = {
+  0: "一丁丂七丄丅丆万丈三上下丌不与丏丐丑丒专且丕世丗丘丙业丛东丝丞丟丠両丢丣两严並丧丨丩个丫丬中丮丯丰丱串丳临丵丶丷丸丹为主丼丽举丿乀乁乂乃乄久乆乇么义乊之乌乍乎乏乐乑乒乓乔乕乖乗".split(''),
+  1: "亀亁亂亃亄亅了亇予争亊事二亍于亏亐云互亓五井亖亗亘亙亚些亜亝亞亟亠亡亢亣交亥亦产亨亩亪享京亭亮亯亰亱亲亳亴亵亶亷亸亹人亻亼亽亾亿什仁仂仃仄仅仆仇仈仉今介仌仍从仏仐仑仒仓仔仕他仗".split(''),
+  2: "伀企伂伃伄伅伆伇伈伉伊伋伌伍伎伏伐休伒伓伔伕伖众优伙会伛伜伝伞伟传伡伢伣伤伥伦伧伨伩伪伫伬伭伮伯估伱伲伳伴伵伶伷伸伹伺伻似伽伾伿佀佁佂佃佄佅但佇佈佉佊佋佌位低住佐佑佒体佔何佖佗".split(''),
+  3: "侀侁侂侃侄侅來侇侈侉侊例侌侍侎侏侐侑侒侓侔侕侖侗侘侙侚供侜依侞侟侠価侢侣侤侥侦侧侨侩侪侫侬侭侮侯侰侱侲侳侴侵侶侷侸侹侺侻侼侽侾便俀俁係促俄俅俆俇俈俉俊俋俌俍俎俏俐俑俒俓俔俕俖俗".split(''),
+  4: "倀倁倂倃倄倅倆倇倈倉倊個倌倍倎倏倐們倒倓倔倕倖倗倘候倚倛倜倝倞借倠倡倢倣値倥倦倧倨倩倪倫倬倭倮倯倰倱倲倳倴倵倶倷倸倹债倻值倽倾倿偀偁偂偃偄偅偆假偈偉偊偋偌偍偎偏偐偑偒偓偔偕偖偗".split(''),
+  5: "傀傁傂傃傄傅傆傇傈傉傊傋傌傍傎傏傐傑傒傓傔傕傖傗傘備傚傛傜傝傞傟傠傡傢傣傤傥傦傧储傩傪傫催傭傮傯傰傱傲傳傴債傶傷傸傹傺傻傼傽傾傿僀僁僂僃僄僅僆僇僈僉僊僋僌働僎像僐僑僒僓僔僕僖僗".split(''),
+  6: "儀儁儂儃億儅儆儇儈儉儊儋儌儍儎儏儐儑儒儓儔儕儖儗儘儙儚儛儜儝儞償儠儡儢儣儤儥儦儧儨儩優儫儬儭儮儯儰儱儲儳儴儵儶儷儸儹儺儻儼儽儾儿兀允兂元兄充兆兇先光兊克兌免兎兏児兑兒兓兔兕兖兗".split(''),
+  7: "冀冁冂冃冄内円冇冈冉冊冋册再冎冏冐冑冒冓冔冕冖冗冘写冚军农冝冞冟冠冡冢冣冤冥冦冧冨冩冪冫冬冭冮冯冰冱冲决冴况冶冷冸冹冺冻冼冽冾冿净凁凂凃凄凅准凇凈凉凊凋凌凍凎减凐凑凒凓凔凕凖凗".split(''),
+  8: "刀刁刂刃刄刅分切刈刉刊刋刌刍刎刏刐刑划刓刔刕刖列刘则刚创刜初刞刟删刡刢刣判別刦刧刨利刪别刬刭刮刯到刱刲刳刴刵制刷券刹刺刻刼刽刾刿剀剁剂剃剄剅剆則剈剉削剋剌前剎剏剐剑剒剓剔剕剖剗".split(''),
+  9: "劀劁劂劃劄劅劆劇劈劉劊劋劌劍劎劏劐劑劒劓劔劕劖劗劘劙劚力劜劝办功加务劢劣劤劥劦劧动助努劫劬劭劮劯劰励劲劳労劵劶劷劸効劺劻劼劽劾势勀勁勂勃勄勅勆勇勈勉勊勋勌勍勎勏勐勑勒勓勔動勖勗".split(''),
+  10: "匀匁匂匃匄包匆匇匈匉匊匋匌匍匎匏匐匑匒匓匔匕化北匘匙匚匛匜匝匞匟匠匡匢匣匤匥匦匧匨匩匪匫匬匭匮匯匰匱匲匳匴匵匶匷匸匹区医匼匽匾匿區十卂千卄卅卆升午卉半卋卌卍华协卐卑卒卓協单卖南".split(''),
+  11: "厀厁厂厃厄厅历厇厈厉厊压厌厍厎厏厐厑厒厓厔厕厖厗厘厙厚厛厜厝厞原厠厡厢厣厤厥厦厧厨厩厪厫厬厭厮厯厰厱厲厳厴厵厶厷厸厹厺去厼厽厾县叀叁参參叄叅叆叇又叉及友双反収叏叐发叒叓叔叕取受".split(''),
+  12: "吀吁吂吃各吅吆吇合吉吊吋同名后吏吐向吒吓吔吕吖吗吘吙吚君吜吝吞吟吠吡吢吣吤吥否吧吨吩吪含听吭吮启吰吱吲吳吴吵吶吷吸吹吺吻吼吽吾吿呀呁呂呃呄呅呆呇呈呉告呋呌呍呎呏呐呑呒呓呔呕呖呗".split(''),
+  13: "咀咁咂咃咄咅咆咇咈咉咊咋和咍咎咏咐咑咒咓咔咕咖咗咘咙咚咛咜咝咞咟咠咡咢咣咤咥咦咧咨咩咪咫咬咭咮咯咰咱咲咳咴咵咶咷咸咹咺咻咼咽咾咿哀品哂哃哄哅哆哇哈哉哊哋哌响哎哏哐哑哒哓哔哕哖哗".split(''),
+  14: "唀唁唂唃唄唅唆唇唈唉唊唋唌唍唎唏唐唑唒唓唔唕唖唗唘唙唚唛唜唝唞唟唠唡唢唣唤唥唦唧唨唩唪唫唬唭售唯唰唱唲唳唴唵唶唷唸唹唺唻唼唽唾唿啀啁啂啃啄啅商啇啈啉啊啋啌啍啎問啐啑啒啓啔啕啖啗".split(''),
+  15: "喀喁喂喃善喅喆喇喈喉喊喋喌喍喎喏喐喑喒喓喔喕喖喗喘喙喚喛喜喝喞喟喠喡喢喣喤喥喦喧喨喩喪喫喬喭單喯喰喱喲喳喴喵営喷喸喹喺喻喼喽喾喿嗀嗁嗂嗃嗄嗅嗆嗇嗈嗉嗊嗋嗌嗍嗎嗏嗐嗑嗒嗓嗔嗕嗖嗗".split('')
+};
+
+const SONG_DIR = path.resolve(__dirname, '..', 'songs');
+const PLAY_PREFIX = '/// ';
+// 单个 bot 每 tick 最多承担的音符数（超过就开小号，参照 WeeaxeBot）
+const POLYPHONY_THRESHOLD = 2.3;
+// 子 bot 登录 + 传送等待时间（毫秒）
+const CHILD_LOGIN_WAIT = 3500;
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 会话状态挂在 bot 上：脚本每次被 require 都是全新的模块，
+// 只有挂在 bot 上，stop 命令才能中断正在播放的循环。
+function getSession(bot) {
+    if (!bot.__nbsSession) {
+        bot.__nbsSession = { token: 0, childBots: [] };
+    }
+    return bot.__nbsSession;
+}
+
+function stopPlayback(bot, reply) {
+    const session = bot.__nbsSession;
+    if (!session) {
+        if (reply) reply('当前没有播放任务');
+        return false;
+    }
+    session.token++; // 让正在播放的循环立即退出
+    for (const child of session.childBots) {
+        try {
+            if (child && child._client && !child._client.ended) child.quit();
+        } catch (e) { /* 忽略子 bot 退出错误 */ }
+    }
+    session.childBots = [];
+    if (reply) reply('已停止播放');
+    return true;
+}
+
+function isClientAlive(target) {
+    return target && target._client && !target._client.ended;
+}
+
+// 预处理：把每一 tick 上所有层里的音符，转换成 "/// 字符" 形式
+function buildTabList(song) {
+    const songLength = song.getLength();
+    const rows = [];
+    for (let tick = 0; tick <= songLength; tick++) {
+        const row = [];
+        // 从最上层往下取（与 WeeaxeBot 一致，顶层音符优先）
+        for (let i = song.layers.getTotal() - 1; i >= 0; i--) {
+            const layer = song.layers.all[i];
+            if (!layer || !layer.notes || layer.notes.getTotal() === 0) continue;
+            const note = layer.notes.all[tick];
+            if (!note) continue;
+            // 乐器编号 0-15 -> 字符表；音高 key 0-87 -> 字符下标 key+4（WeeaxeBot 原版偏移）
+            const ch = instrCharMap[note.instrument]?.[note.key + 4] ?? '';
+            if (ch) row.push(PLAY_PREFIX + ch);
+        }
+        rows.push(row);
+    }
+    return rows;
+}
+
+// 创建子 bot：同一服务器、offline 模式，先过验证码再注册，然后切 unicode 键盘并传送到主 bot
+async function createChildBot(bot, index, config) {
+    const mineflayer = require('mineflayer');
+    const username = bot.username + index; // 序号命名：主名+序号（如 RS_Bot1、RS_Bot2）
+    const child = mineflayer.createBot({
+        host: config.server.host,
+        port: parseInt(config.server.port, 10),
+        username,
+        auth: 'offline',
+        version: String(config.server.version || '1.21.4'),
+        hideErrors: true,
+    });
+    const password = config.bot.password || '';
+
+    // 服务器可能要求先输验证码（/captcha <code>）才能注册
+    let captchaSent = false;
+    const handleCaptchaText = (text) => {
+        if (!text || captchaSent) return;
+        const s = String(text);
+        // 只响应服务器下发的验证码请求（带“验证码/注册”等语境），
+        // 避免把自己发出的 /captcha 回显当成新请求导致死循环
+        if (!/captcha/i.test(s) || !/验证码|注册|请使用|请输入|require|register/i.test(s)) return;
+        const m = s.match(/\/captcha\s+([A-Za-z0-9]+)/i);
+        if (m) {
+            captchaSent = true;
+            try { child.chat('/captcha ' + m[1]); } catch (e) {}
+        }
+    };
+    child.on('message', (jsonMsg) => {
+        try {
+            const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
+            handleCaptchaText(text);
+        } catch (e) {}
+    });
+    child.on('chat', (name, msg) => handleCaptchaText(msg));
+
+    let spawned = false;
+    child.on('spawn', () => {
+        spawned = true;
+        // 注册流程：先等验证码（最多 6 秒），发出验证码后稍等再注册
+        const register = () => {
+            try {
+                if (password) {
+                    child.chat(`/register ${password} ${password}`);
+                    child.chat(`/login ${password}`);
+                }
+                child.chat('/piano keyboard unicode');
+                child.chat('/tp ' + bot.username);
+            } catch (e) { /* 忽略 */ }
+        };
+        const start = Date.now();
+        const waitTimer = setInterval(() => {
+            if (captchaSent || Date.now() - start > 6000) {
+                clearInterval(waitTimer);
+                setTimeout(register, captchaSent ? 800 : 0);
+            }
+        }, 200);
+    });
+    child.on('error', () => {});
+    child.on('kicked', () => {});
+
+    // 等待出生（最多 CHILD_LOGIN_WAIT 毫秒），失败则放弃该小号
+    const deadline = Date.now() + CHILD_LOGIN_WAIT;
+    while (!spawned && Date.now() < deadline) await sleep(100);
+    if (!spawned) {
+        try { child.end(); } catch (e) {}
+        try { child.quit(); } catch (e) {}
+        return null;
+    }
+    // 留一点时间让 /login、/tp 生效
+    await sleep(800);
+    return child;
+}
+
+async function playNBS(bot, session, filePath, reply, log, config) {
+    // 先停掉上一次播放
+    stopPlayback(bot, null);
+    const token = ++session.token;
+    session.childBots = [];
+
+    // 读取并解析 NBS
+    let song;
+    try {
+        const songFile = fs.readFileSync(filePath);
+        song = fromArrayBuffer(new Uint8Array(songFile).buffer);
+    } catch (err) {
+        reply('读取/解析 NBS 文件失败: ' + err.message);
+        return;
+    }
+
+    const songLength = song.getLength();
+    const songSpeed = song.getTimePerTick();
+    const songName = song.name || path.basename(filePath);
+    log('info', `正在播放: ${songName}，曲长 ${songLength} tick，速度 ${songSpeed}ms/tick，预计 ${(songLength * songSpeed / 1000).toFixed(1)}s`);
+
+    // 主 bot 切换 unicode 键盘（服务端钢琴插件）
+    try { bot.chat('/piano keyboard unicode'); } catch (e) {}
+
+    // 预处理音符
+    const rows = buildTabList(song);
+    const totalNotes = rows.reduce((sum, row) => sum + row.length, 0);
+    const avgNotes = totalNotes / Math.max(1, songLength);
+    const botNum = Math.max(1, Math.ceil(avgNotes / POLYPHONY_THRESHOLD));
+    log('info', `音符总数 ${totalNotes}，平均每 tick ${avgNotes.toFixed(2)} 个，需要 ${botNum} 个 bot`);
+
+    // 多音响度：音符密集时开小号分担
+    if (botNum > 1) {
+        for (let k = 1; k < botNum; k++) {
+            const child = await createChildBot(bot, k, config);
+            session.childBots.push(child);
+            if (child) log('info', `子 bot ${child.username} 已就绪`);
+            else log('warn', `子 bot ${k} 登录失败，继续用现有 bot 播放`);
+        }
+    }
+    if (token !== session.token) {
+        stopPlayback(bot, null); // 等待小号期间被 stop 了
+        return;
+    }
+
+    // 小号在前、主 bot 兜底（与 WeeaxeBot 一致）
+    const botList = [...session.childBots.filter(Boolean), bot];
+
+    // 逐 tick 播放
+    let nextTick = performance.now();
+    let transactionId = 1;
+    let pointer = 0;
+    for (let j = 0; j < rows.length; j++) {
+        if (token !== session.token) break; // 停止控制
+        if (!isClientAlive(bot)) {
+            log('warn', '主 bot 已断开，停止播放');
+            break;
+        }
+
+        const now = performance.now();
+        let waitMs = Math.ceil(nextTick - now);
+        // 上一 tick 音符越多发包越耗时，这里提前扣掉（WeeaxeBot 的补偿技巧）
+        const prevLen = j > 0 ? rows[j - 1].length : 0;
+        if (prevLen) waitMs -= 0.7 * prevLen;
+        if (waitMs > 0) await sleep(waitMs);
+        nextTick += songSpeed;
+
+        const row = rows[j];
+        if (!row || row.length === 0) continue;
+        for (let i = row.length - 1; i >= 0; i--) {
+            if (token !== session.token) break;
+            const sender = botList[pointer % botList.length];
+            pointer++;
+            if (sender && isClientAlive(sender)) {
+                try {
+                    sender._client.write('tab_complete', {
+                        transactionId: transactionId++,
+                        text: row[i],
+                    });
+                } catch (err) {
+                    log('warn', `发送音符失败: ${err.message}`);
+                }
+                // 同一 tick 的多个音符分开发送，避免突发把服务器插件打崩（internal error 踢人）
+                await sleep(15);
+            }
+        }
+    }
+
+    // 收尾：下掉小号、复位状态
+    const finished = token === session.token;
+    stopPlayback(bot, null);
+    if (finished) reply(`播放结束: ${songName}`);
+}
+
+function listSongs(keyword) {
+    const results = [];
+    if (fs.existsSync(SONG_DIR)) {
+        const walk = (dir) => {
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, ent.name);
+                if (ent.isDirectory()) walk(full);
+                else if (ent.isFile() && ent.name.toLowerCase().endsWith('.nbs')) results.push(full);
+            }
+        };
+        walk(SONG_DIR);
+    }
+    const kw = (keyword || '').toLowerCase();
+    return kw ? results.filter((f) => path.basename(f).toLowerCase().includes(kw)) : results;
+}
+
+module.exports = async function (bot, context) {
+    const { reply, args, log, config } = context;
+    const session = getSession(bot);
+    const sub = (args[0] || '').toLowerCase();
+
+    if (sub === 'stop') {
+        stopPlayback(bot, reply);
+        return;
+    }
+
+    if (sub === 'list') {
+        const matched = listSongs(args[1]);
+        reply(`songs/ 目录下共 ${matched.length} 首匹配歌曲：`);
+        const names = matched.slice(0, 15).map((f) => '  ' + path.relative(SONG_DIR, f));
+        reply(names.length ? names.join('\n') : '（没有找到 .nbs 文件，请先放歌到 songs/ 文件夹）');
+        return;
+    }
+
+    let fileName = sub;
+    if (fileName === 'play') fileName = (args[1] || '').trim(); // 兼容 playnbs play <歌名>
+
+    if (!fileName || fileName === 'help') {
+        reply('用法: **run playnbs <歌曲名.nbs> | stop | list [关键词]');
+        reply(`歌曲文件放到项目根目录 songs/ 文件夹（${SONG_DIR}）`);
+        return;
+    }
+
+    // 路径安全校验：只允许 songs/ 目录内的文件（防止 ../ 越权）
+    if (!fs.existsSync(SONG_DIR)) fs.mkdirSync(SONG_DIR, { recursive: true });
+    let target = path.resolve(SONG_DIR, fileName);
+    if (!target.startsWith(SONG_DIR + path.sep)) {
+        reply('非法路径，只允许 songs/ 目录内的歌曲');
+        return;
+    }
+    // 自动补 .nbs 后缀
+    if (!fs.existsSync(target) && !target.toLowerCase().endsWith('.nbs')) {
+        const alt = target + '.nbs';
+        if (fs.existsSync(alt)) target = alt;
+    }
+    if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        reply(`歌曲不存在: songs/${fileName}（可用 **run playnbs list 查看）`);
+        return;
+    }
+    if (!target.toLowerCase().endsWith('.nbs')) {
+        reply('只支持 .nbs 音符方块谱文件');
+        return;
+    }
+
+    reply(`开始播放: ${path.relative(SONG_DIR, target)}`);
+    await playNBS(bot, session, target, reply, log, config);
+};
