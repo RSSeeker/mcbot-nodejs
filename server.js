@@ -745,6 +745,30 @@ function createBot(overrides = {}) {
     bot._client.on('abilities', (packet) => {
         if (packet && typeof packet.flags === 'number') bot._abilitiesFlags = packet.flags;
     });
+    // 自行维护“玩家↔载具”关系（弥补 mineflayer 下车后不清除 vehicle 引用的问题）
+    // 服务器每次 set_passengers 都会带上某载具当前的完整乘客列表，对比前后即可知道谁下车了
+    bot.__vehiclePassengers = new Map(); // vehicleId -> Set(playerId)
+    bot.__passengerVehicle = new Map();  // playerId -> vehicleId
+    bot._client.on('set_passengers', (packet) => {
+        try {
+            const vehId = packet.entityId;
+            if (vehId === -1) {
+                // 包内乘客全部下车
+                for (const pid of packet.passengers) bot.__passengerVehicle.delete(pid);
+                return;
+            }
+            const current = new Set(packet.passengers);
+            const prev = bot.__vehiclePassengers.get(vehId) || new Set();
+            // 之前在这辆车上、现在不在列表里的 → 下车了
+            for (const pid of prev) {
+                if (!current.has(pid) && bot.__passengerVehicle.get(pid) === vehId) {
+                    bot.__passengerVehicle.delete(pid);
+                }
+            }
+            bot.__vehiclePassengers.set(vehId, current);
+            for (const pid of current) bot.__passengerVehicle.set(pid, vehId);
+        } catch (e) {}
+    });
 
     let connectTimer = setTimeout(() => {
         if (!currentStatus.connected) {
@@ -1726,6 +1750,631 @@ async function moveToHotbar() {
 }
 
 // ═══════════════════════════════════
+//  飞行寻路（合并自 flyto.js / followme.js 脚本）
+// ═══════════════════════════════════
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 逐轴速度函数：每个轴的速度 = 该轴距离的函数（比例 + 上限 + 死区）
+function createAxisSpeed(maxMps, k) {
+    const DEADBAND = 0.35;
+    return (err) => {
+        const abs = Math.abs(err);
+        if (abs < DEADBAND) return 0;
+        const s = Math.min(maxMps, abs * k);
+        return err > 0 ? s : -s;
+    };
+}
+const axisX = createAxisSpeed(10.9, 0.8); // 水平轴：上限原版创造飞行速度
+const axisZ = createAxisSpeed(10.9, 0.8);
+const axisY = createAxisSpeed(3.9, 1.0);  // 垂直轴：上限 3.9
+
+// 飞行寻路状态（token 用于停止控制）
+let flyGotoToken = 0;
+let flyFollowToken = 0;
+let flyGotoActive = false;
+let flyFollowActive = false;
+
+const FLY_AIR_LIKE = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava']);
+
+// 方块是否阻挡（没有碰撞盒的视为可通行；未加载区块保守视为阻挡）
+function isSolid(bot, pos) {
+    const b = bot.blockAt(pos);
+    if (!b) return true;
+    // 打开的门 / 打开的活板门：可穿过
+    if ((b.name.endsWith('_door') || b.name.endsWith('_trapdoor')) && typeof b.getProperties === 'function') {
+        try {
+            const props = b.getProperties();
+            if (props && props.open === true) return false;
+        } catch (e) {}
+    }
+    return b.shapes && b.shapes.length > 0;
+}
+
+// bot 是 1 格宽 2 格高：脚底格和头顶格都要可通行
+function canOccupy(bot, pos) {
+    return !isSolid(bot, pos) && !isSolid(bot, pos.offset(0, 1, 0));
+}
+
+// 脚下到地面的距离（0 = 脚下方块就是地面；Infinity = 下方没有地面/未加载）
+function distToGround(bot, pos, maxScan = 16) {
+    for (let d = 0; d <= maxScan; d++) {
+        const b = bot.blockAt(pos.offset(0, -d, 0));
+        if (!b) return Infinity;
+        if (!FLY_AIR_LIKE.has(b.name)) return d;
+    }
+    return Infinity;
+}
+
+// 直线是否畅通（每 0.5 格采样一次）
+function lineClear(bot, from, to) {
+    const dist = from.distanceTo(to);
+    const steps = Math.max(1, Math.ceil(dist / 0.5));
+    for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        const p = from.plus(to.minus(from).scaled(t));
+        if (!canOccupy(bot, p)) return false;
+    }
+    return true;
+}
+
+// 26 方向邻居（含对角）
+const DIRS26 = [];
+for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+            if (dx === 0 && dy === 0 && dz === 0) continue;
+            DIRS26.push([dx, dy, dz]);
+        }
+    }
+}
+
+class MinHeap {
+    constructor() { this.a = []; }
+    get size() { return this.a.length; }
+    push(v) {
+        const a = this.a;
+        a.push(v);
+        let i = a.length - 1;
+        while (i > 0) {
+            const p = (i - 1) >> 1;
+            if (a[p][0] <= a[i][0]) break;
+            [a[p], a[i]] = [a[i], a[p]];
+            i = p;
+        }
+    }
+    pop() {
+        const a = this.a;
+        if (a.length === 1) return a.pop();
+        const top = a[0];
+        a[0] = a.pop();
+        let i = 0;
+        for (;;) {
+            const l = i * 2 + 1, r = l + 1;
+            let m = i;
+            if (l < a.length && a[l][0] < a[m][0]) m = l;
+            if (r < a.length && a[r][0] < a[m][0]) m = r;
+            if (m === i) break;
+            [a[m], a[i]] = [a[i], a[m]];
+            i = m;
+        }
+        return top;
+    }
+}
+
+function keyOf(x, y, z) {
+    return x + ',' + y + ',' + z;
+}
+
+// A*：3D 可行路径，返回路径点数组（不含起点），找不到返回 null
+function aStar3D(bot, start, goal) {
+    const sx = Math.floor(start.x), sy = Math.floor(start.y), sz = Math.floor(start.z);
+    const gx = Math.floor(goal.x), gy = Math.floor(goal.y), gz = Math.floor(goal.z);
+    const margin = 8;
+    const minX = Math.min(sx, gx) - margin, maxX = Math.max(sx, gx) + margin;
+    const minZ = Math.min(sz, gz) - margin, maxZ = Math.max(sz, gz) + margin;
+    const worldMinY = bot.game && Number.isFinite(bot.game.minY) ? bot.game.minY : -64;
+    const worldMaxY = bot.game && Number.isFinite(bot.game.height) ? bot.game.minY + bot.game.height : 320;
+    const minY = Math.max(worldMinY, Math.min(sy, gy) - margin);
+    const maxY = Math.min(worldMaxY, Math.max(sy, gy) + margin);
+    const SPAN_LIMIT = 80;
+    if (maxX - minX > SPAN_LIMIT || maxY - minY > SPAN_LIMIT || maxZ - minZ > SPAN_LIMIT) return null;
+    const cells = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+    if (cells > 250000) return null;
+
+    const startKey = keyOf(sx, sy, sz);
+    const goalKey = keyOf(gx, gy, gz);
+    const gScore = new Map([[startKey, 0]]);
+    const fScore = new Map();
+    const cameFrom = new Map();
+    const closed = new Set();
+    const open = new MinHeap();
+    const h = (x, y, z) => Math.sqrt((x - gx) ** 2 + (y - gy) ** 2 + (z - gz) ** 2);
+    fScore.set(startKey, h(sx, sy, sz));
+    open.push([fScore.get(startKey), startKey]);
+
+    while (open.size > 0) {
+        const [, key] = open.pop();
+        if (closed.has(key)) continue;
+        closed.add(key);
+        if (key === goalKey) {
+            const path = [];
+            let cur = goalKey;
+            while (cur !== startKey) {
+                const [x, y, z] = cur.split(',').map(Number);
+                path.push(new Vec3(x, y, z));
+                cur = cameFrom.get(cur);
+            }
+            path.reverse();
+            return path;
+        }
+        const [x, y, z] = key.split(',').map(Number);
+        const g = gScore.get(key);
+        for (const d of DIRS26) {
+            const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+            if (nx < minX || nx > maxX || ny < minY || ny > maxY || nz < minZ || nz > maxZ) continue;
+            const nkey = keyOf(nx, ny, nz);
+            if (closed.has(nkey)) continue;
+            if (!canOccupy(bot, new Vec3(nx, ny, nz))) continue;
+            const step = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            const tentG = g + step;
+            if (tentG < (gScore.get(nkey) ?? Infinity)) {
+                cameFrom.set(nkey, key);
+                gScore.set(nkey, tentG);
+                const f = tentG + h(nx, ny, nz);
+                fScore.set(nkey, f);
+                open.push([f, nkey]);
+            }
+        }
+    }
+    return null;
+}
+
+// 路径直线化：能直接看到的路径点就跳过中间的
+function smoothPath(bot, path, start) {
+    const pts = [start.clone().floored(), ...path];
+    const out = [pts[0]];
+    let i = 0;
+    while (i < pts.length - 1) {
+        let j = pts.length - 1;
+        while (j > i + 1 && !lineClear(bot, pts[i], pts[j])) j--;
+        out.push(pts[j]);
+        i = j;
+    }
+    return out.slice(1);
+}
+
+// 简单绕行：先升高若干格再直线飞向目标（翻越矮障碍/山坡）
+function tryClimbDetour(bot, my, goal) {
+    for (const dy of [3, 5, 8, 12]) {
+        const up = new Vec3(my.x, my.y + dy, my.z);
+        if (lineClear(bot, up, goal)) {
+            return [up, goal.clone().floored()];
+        }
+    }
+    return null;
+}
+
+function botCanFly(bot) {
+    const gameMode = bot.game ? bot.game.gameMode : '';
+    return gameMode === 'creative' || gameMode === 'spectator';
+}
+
+// 开启脚本飞行（本地零重力 + 通知服务器，独立于网页飞行）
+function enableScriptFly(bot) {
+    try { bot.creative.startFlying(); } catch (e) {}
+    try {
+        const gameMode = bot.game ? bot.game.gameMode : '';
+        bot._abilitiesFlags = gameMode === 'spectator' ? 0x0f : 0x0e;
+        bot._client.write('abilities', { flags: bot._abilitiesFlags });
+    } catch (e) {}
+}
+
+function stopScriptFly(bot) {
+    if (!bot) return;
+    try { bot.creative.stopFlying(); } catch (e) {}
+    try {
+        const gameMode = bot.game ? bot.game.gameMode : '';
+        bot._abilitiesFlags = gameMode === 'spectator' ? 0x0d : 0x0c;
+        bot._client.write('abilities', { flags: bot._abilitiesFlags });
+    } catch (e) {}
+}
+
+// **goto <x> <y> <z> 空间寻路主循环（目标固定，直线/绕行/A*，带卡住脱困）
+async function flyGotoLoop(token, target, reply) {
+    const botRef = bot;
+    if (!botRef || !botRef.entity) return;
+    flyGotoActive = true;
+    enableScriptFly(botRef);
+    log('info', `[空间寻路] 开启飞行 → (${target.x}, ${target.y}, ${target.z})`);
+
+    let vx = 0, vy = 0, vz = 0;
+    let flyPath = null, flyWpIdx = 0, lastPathTime = 0, lastPathGoal = null;
+    let lastMovePos = null, lastMoveTime = 0, noMoveCount = 0, backoffUntil = 0;
+    let flyTimer = null;
+
+    try {
+        flyTimer = setInterval(() => {
+            if (!botRef || !botRef.entity) return;
+            botRef.setControlState('jump', false);
+            botRef.setControlState('sneak', false);
+            const vyTick = (botRef.entity.onGround && vy < 0) ? 0 : vy / 20;
+            botRef.entity.velocity = new Vec3(vx / 20, vyTick, vz / 20);
+        }, 25);
+
+        while (token === flyGotoToken && botRef && botRef.entity && botRef._client && !botRef._client.ended) {
+            const my = botRef.entity.position;
+            const delta = target.minus(my);
+            const horiz = Math.sqrt(delta.x * delta.x + delta.z * delta.z);
+            const dist = delta.distanceTo(new Vec3(0, 0, 0));
+
+            if (dist <= 1.0) {
+                vx = vy = vz = 0;
+                reply(`到达目标 (${target.x}, ${target.y}, ${target.z})，已悬停`);
+                break;
+            }
+
+            const now = Date.now();
+            // 卡住检测：3 秒净位移 < 0.5
+            if (!lastMovePos) {
+                lastMovePos = my.clone();
+                lastMoveTime = now;
+            } else if (now - lastMoveTime >= 3000) {
+                const net = lastMovePos.distanceTo(my);
+                if (net < 0.5) noMoveCount++;
+                else noMoveCount = 0;
+                lastMovePos = my.clone();
+                lastMoveTime = now;
+            }
+            if (noMoveCount >= 2) {
+                log('warn', '[空间寻路] 卡住，后退 3 秒后重新规划');
+                flyPath = null;
+                noMoveCount = 0;
+                backoffUntil = Date.now() + 3000;
+            }
+            if (Date.now() < backoffUntil) {
+                const h = Math.hypot(delta.x, delta.z);
+                if (h > 0.1) {
+                    vx = Math.max(-2.5, Math.min(2.5, -delta.x / h * 2.5));
+                    vz = Math.max(-2.5, Math.min(2.5, -delta.z / h * 2.5));
+                } else {
+                    vx = 0; vz = 0;
+                }
+                vy = 0;
+                await sleep(100);
+                continue;
+            }
+
+            // 路径规划：直线畅通直接飞；被挡则简单绕行或 A*
+            const needRepath = !flyPath || flyWpIdx >= flyPath.length ||
+                (lastPathGoal && lastPathGoal.distanceTo(target) > 2) ||
+                (now - lastPathTime > 2000 && flyPath && my.distanceTo(flyPath[flyWpIdx]) < 1.2);
+            if (needRepath) {
+                if (lineClear(botRef, my, target)) {
+                    flyPath = null;
+                } else {
+                    const detour = tryClimbDetour(botRef, my, target);
+                    if (detour) {
+                        flyPath = detour;
+                        log('info', '[空间寻路] 目标在墙后，简单绕行（先升高再直飞）');
+                    } else {
+                        const raw = aStar3D(botRef, my, target);
+                        flyPath = raw ? smoothPath(botRef, raw, my) : null;
+                        if (flyPath) log('info', `[空间寻路] 目标在墙后，规划绕行路径 ${flyPath.length} 个点`);
+                        else {
+                            reply('目标在墙后且无法规划绕行路径，已停止');
+                            vx = vy = vz = 0;
+                            break;
+                        }
+                    }
+                }
+                flyWpIdx = 0;
+                lastPathTime = now;
+                lastPathGoal = target.clone();
+            }
+
+            // 路径点推进（接近或冲过头时换下一个）
+            if (flyPath && flyWpIdx < flyPath.length) {
+                const cur = flyPath[flyWpIdx];
+                const next = flyPath[flyWpIdx + 1];
+                if (my.distanceTo(cur) < 1.2 || (next && my.distanceTo(next) < my.distanceTo(cur))) flyWpIdx++;
+            }
+
+            // 各轴速度 + 视线指向当前目标点
+            let tx = target.x, ty = target.y, tz = target.z;
+            if (flyPath && flyWpIdx < flyPath.length) {
+                const wp = flyPath[flyWpIdx];
+                tx = wp.x; ty = wp.y; tz = wp.z;
+            }
+            vx = axisX(tx - my.x);
+            vy = axisY(ty - my.y);
+            vz = axisZ(tz - my.z);
+            const dx2 = tx - my.x, dz2 = tz - my.z;
+            const yaw = Math.atan2(-dx2, -dz2);
+            const pitch = Math.atan2(ty - my.y, Math.sqrt(dx2 * dx2 + dz2 * dz2));
+            botRef.look(yaw, pitch, true);
+            botRef.setControlState('forward', true);
+
+            await sleep(100);
+        }
+    } finally {
+        if (flyTimer) clearInterval(flyTimer);
+        if (botRef) {
+            botRef.setControlState('forward', false);
+            botRef.setControlState('jump', false);
+            botRef.setControlState('sneak', false);
+        }
+        stopScriptFly(botRef);
+        flyGotoActive = false;
+        log('info', '[空间寻路] 结束');
+    }
+}
+
+// **follow 持续跟随主循环（地面寻路 + 空中飞行跟随 + 避障 + 卡住脱困）
+async function flyFollowLoop(token, targetName, keepDist, reply) {
+    const botRef = bot;
+    if (!botRef || !botRef.entity) return;
+    flyFollowActive = true;
+
+    let flying = false;
+    let flyTimer = null;
+    let vx = 0, vy = 0, vz = 0;
+    let flyPath = null, flyWpIdx = 0, lastPathTime = 0, lastPathGoal = null;
+    let lastMovePos = null, lastMoveTime = 0, noMoveCount = 0, backoffUntil = 0;
+    let backoffCount = 0; // 连续后退脱困失败的次数（多次失败则 /tp）
+    let lastBackoffDist = Infinity; // 上次后退时与玩家的距离（用于判断是否真正接近）
+    let lastTpTime = 0, tpAttempts = 0, tpWarned = false;
+    const TP_INTERVAL = 10000;
+
+    const gameMode = botRef.game ? botRef.game.gameMode : '';
+    const canFly = gameMode === 'creative' || gameMode === 'spectator';
+
+    function enableFly() {
+        if (flying) return;
+        flying = true;
+        enableScriptFly(botRef);
+        flyTimer = setInterval(() => {
+            if (!botRef || !botRef.entity) return;
+            botRef.setControlState('jump', false);
+            botRef.setControlState('sneak', false);
+            const vyTick = (botRef.entity.onGround && vy < 0) ? 0 : vy / 20;
+            botRef.entity.velocity = new Vec3(vx / 20, vyTick, vz / 20);
+        }, 25);
+        log('info', '[跟随] 已切换为飞行跟随');
+    }
+
+    function disableFly() {
+        if (!flying) return;
+        flying = false;
+        if (flyTimer) { clearInterval(flyTimer); flyTimer = null; }
+        stopScriptFly(botRef);
+        botRef.setControlState('jump', false);
+        botRef.setControlState('sneak', false);
+        log('info', '[跟随] 已切换为地面跟随');
+    }
+
+    function tryTp(reason) {
+        const now = Date.now();
+        if (now - lastTpTime < TP_INTERVAL) return;
+        lastTpTime = now;
+        tpAttempts++;
+        log('info', `[跟随] 目标 ${targetName} ${reason}，尝试 /tp（第 ${tpAttempts} 次）`);
+        botRef.chat('/tp ' + targetName);
+    }
+
+    try {
+        while (token === flyFollowToken && botRef && botRef.entity && botRef._client && !botRef._client.ended) {
+            const player = botRef.players[targetName];
+            if (!player || !player.entity) {
+                botRef.pathfinder?.stop();
+                botRef.setControlState('forward', false);
+                botRef.setControlState('jump', false);
+                botRef.setControlState('sneak', false);
+                vx = 0; vy = 0; vz = 0;
+                if (botRef.players[targetName]) {
+                    tryTp('在线但距离过远');
+                    if (tpAttempts >= 5 && !tpWarned) {
+                        tpWarned = true;
+                        log('warn', `[跟随] 多次 /tp 后仍未接近 ${targetName}，可能没有传送权限`);
+                    }
+                } else {
+                    log('info', `[跟随] 目标 ${targetName} 不在玩家列表（可能已下线），等待其上线`);
+                }
+                await sleep(2000);
+                continue;
+            }
+
+            // 玩家乘坐载具时，mineflayer 不会同步乘客位置。
+            // 用自维护的乘客映射（set_passengers 对比）判断是否在车上，下车后立即切回玩家
+            const playerEntity = player.entity;
+            const vehId = botRef.__passengerVehicle ? botRef.__passengerVehicle.get(playerEntity.id) : undefined;
+            const veh = vehId != null ? botRef.entities[vehId] : null;
+            const followEntity = (veh && veh.position) ? veh : playerEntity;
+            const anchor = followEntity.position;
+            const my = botRef.entity.position;
+            const dx = anchor.x - my.x;
+            const dz = anchor.z - my.z;
+            const dy = anchor.y - my.y;
+            const horiz = Math.sqrt(dx * dx + dz * dz);
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+            if (dist > 120) tryTp(`距离 ${Math.round(dist)} 格过远`);
+
+            // 需要飞行：玩家在空中 / 高度差大 / bot 自己不在近地面（桥上不掉落）
+            const blockBelowPlayer = botRef.blockAt(anchor.offset(0, -1, 0));
+            const playerInAir = blockBelowPlayer && FLY_AIR_LIKE.has(blockBelowPlayer.name);
+            const botGroundD = distToGround(botRef, my);
+            const needFly = playerInAir || dy > 1.5 || dy < -2.5 || botGroundD > 1.2;
+
+            if (needFly && canFly) {
+                if (!flying) {
+                    botRef.pathfinder?.stop();
+                    enableFly();
+                }
+
+                if (dist <= keepDist + 0.5) {
+                    // 悬停：水平停住，垂直追踪高度
+                    botRef.setControlState('forward', false);
+                    vx = 0; vz = 0;
+                    vy = axisY(dy);
+                    noMoveCount = 0;
+                    backoffCount = 0;
+                    flyPath = null;
+                } else {
+                    const now = Date.now();
+                    const goal = anchor.clone().floored();
+
+                    // 只有真正接近玩家（比上次后退时近 2 格以上）才重置后退计数
+                    if (dist < lastBackoffDist - 2) backoffCount = 0;
+
+                    // 卡住检测：3 秒净位移 < 0.5
+                    if (!lastMovePos) {
+                        lastMovePos = my.clone();
+                        lastMoveTime = now;
+                    } else if (now - lastMoveTime >= 3000) {
+                        const net = lastMovePos.distanceTo(my);
+                        if (net < 0.5) noMoveCount++;
+                        else { noMoveCount = 0; }
+                        lastMovePos = my.clone();
+                        lastMoveTime = now;
+                    }
+                    if (noMoveCount >= 2) {
+                        backoffCount++;
+                        lastBackoffDist = dist;
+                        log('warn', `[跟随] 卡住（可能撞到角落/天花板），后退 3 秒重新寻路（第 ${backoffCount} 次）`);
+                        if (backoffCount >= 3) {
+                            backoffCount = 0;
+                            log('warn', '[跟随] 多次后退仍卡住，尝试 /tp 到玩家');
+                            tryTp('多次后退仍未脱困');
+                        }
+                        flyPath = null;
+                        noMoveCount = 0;
+                        backoffUntil = Date.now() + 3000;
+                        continue;
+                    }
+                    if (Date.now() < backoffUntil) {
+                        const h = Math.hypot(dx, dz);
+                        if (h > 0.1) {
+                            vx = Math.max(-2.5, Math.min(2.5, -dx / h * 2.5));
+                            vz = Math.max(-2.5, Math.min(2.5, -dz / h * 2.5));
+                        } else {
+                            vx = 0; vz = 0;
+                        }
+                        vy = 0;
+                        botRef.setControlState('forward', false);
+                        await sleep(300);
+                        continue;
+                    }
+
+                    // 路径规划：直线畅通直接飞；被挡则简单绕行或 A*
+                    const needRepath = !flyPath || flyWpIdx >= flyPath.length ||
+                        (lastPathGoal && lastPathGoal.distanceTo(goal) > 2) ||
+                        (now - lastPathTime > 2000 && flyPath && my.distanceTo(flyPath[flyWpIdx]) < 1.2);
+                    if (needRepath) {
+                        if (lineClear(botRef, my, goal)) {
+                            flyPath = null;
+                        } else {
+                            const detour = tryClimbDetour(botRef, my, goal);
+                            if (detour) {
+                                flyPath = detour;
+                                log('info', '[跟随] 直线被挡，简单绕行');
+                            } else {
+                                const raw = aStar3D(botRef, my, goal);
+                                flyPath = raw ? smoothPath(botRef, raw, my) : null;
+                                if (flyPath) log('info', `[跟随] 直线被挡，规划绕行路径 ${flyPath.length} 个点`);
+                                else log('warn', '[跟随] 找不到绕行路径，退回直线飞行');
+                            }
+                        }
+                        flyWpIdx = 0;
+                        lastPathTime = now;
+                        lastPathGoal = goal;
+                    }
+
+                    // 路径点推进
+                    if (flyPath && flyWpIdx < flyPath.length) {
+                        const cur = flyPath[flyWpIdx];
+                        const next = flyPath[flyWpIdx + 1];
+                        if (my.distanceTo(cur) < 1.2 || (next && my.distanceTo(next) < my.distanceTo(cur))) flyWpIdx++;
+                    }
+
+                    if (flyPath && flyWpIdx < flyPath.length) {
+                        // 沿路径点飞，视线始终看向玩家
+                        const wp = flyPath[flyWpIdx];
+                        vx = axisX(wp.x - my.x);
+                        vy = axisY(wp.y - my.y);
+                        vz = axisZ(wp.z - my.z);
+                        flyLookAt(botRef, anchor);
+                    } else {
+                        // 直线追玩家：水平停在 keepDist 处，垂直追高度
+                        const hErr = Math.sqrt(dx * dx + dz * dz);
+                        let ex = dx, ez = dz;
+                        if (hErr > keepDist) {
+                            const scale = (hErr - keepDist) / hErr;
+                            ex = dx * scale;
+                            ez = dz * scale;
+                        } else {
+                            ex = 0; ez = 0;
+                        }
+                        vx = axisX(ex);
+                        vz = axisZ(ez);
+                        vy = axisY(dy);
+                        flyLookAt(botRef, anchor);
+                    }
+                }
+            } else if (needFly && !canFly) {
+                log('warn', `[跟随] 目标飞得太高，但当前模式(${gameMode})不能飞行，只能地面跟随`);
+                if (flying) disableFly();
+                vx = 0; vy = 0; vz = 0;
+                flyPath = null;
+                try {
+                    await botRef.pathfinder.goto(new GoalFollow(followEntity, keepDist));
+                } catch (err) {
+                    await sleep(1000);
+                }
+            } else {
+                if (flying) disableFly();
+                vx = 0; vy = 0; vz = 0;
+                flyPath = null;
+                if (dist > keepDist + 0.5) {
+                    try {
+                        await botRef.pathfinder.goto(new GoalFollow(followEntity, keepDist));
+                    } catch (err) {
+                        await sleep(1000);
+                    }
+                } else {
+                    botRef.pathfinder?.stop();
+                }
+            }
+
+            await sleep(300);
+        }
+    } finally {
+        if (flying) disableFly();
+        if (botRef) {
+            botRef.pathfinder?.stop();
+            botRef.setControlState('forward', false);
+            botRef.setControlState('jump', false);
+            botRef.setControlState('sneak', false);
+        }
+        flyFollowActive = false;
+        log('info', '[跟随] 跟随结束');
+    }
+}
+
+// 视线朝向目标点（yaw 水平、pitch 俯仰）
+function flyLookAt(bot, point) {
+    const p = bot.entity.position;
+    const dx = point.x - p.x, dy = point.y - p.y, dz = point.z - p.z;
+    const horiz = Math.sqrt(dx * dx + dz * dz);
+    const yaw = Math.atan2(-dx, -dz);
+    const pitch = horiz > 0.001 ? Math.atan2(dy, horiz) : (dy > 0 ? Math.PI / 2 : -Math.PI / 2);
+    bot.look(yaw, pitch, true);
+    bot.setControlState('forward', true);
+}
+
+// ═══════════════════════════════════
 //  聊天命令系统
 // ═══════════════════════════════════
 
@@ -1876,8 +2525,8 @@ function executeCommand(line, playerName) {
                 '**move <方向> [时间ms] - 移动 (forward/back/left/right)',
                 '**jump - 跳跃',
                 '**stop - 停止',
-                '**goto <x> <y> <z> - 寻路',
-                '**follow <玩家> [距离] [keep] - 跟随，加keep持续跟随',
+                '**goto <x> <z> - 平面寻路；**goto <x> <y> <z> - 空间飞行寻路（含墙后绕行）',
+                '**follow <玩家> [距离] - 持续跟随（地面/飞行自动切换）',
                 '**attack [时间] - 攻击',
                 '**dig [时间] - 挖掘',
                 '**place - 放置方块',
@@ -2079,6 +2728,8 @@ function executeCommand(line, playerName) {
         case 'stop':
             stopMove();
             stopKeepFollow();
+            flyFollowToken++;
+            flyGotoToken++;
             // 停止所有运行中的脚本：flag 机制（farm/tree/mine 等）+ 通用协作式记录
             if (bot && bot.__scriptFlags) {
                 for (const key of Object.keys(bot.__scriptFlags)) bot.__scriptFlags[key] = true;
@@ -2100,14 +2751,22 @@ function executeCommand(line, playerName) {
             }
             break;
         case 'goto':
-            if (args.length < 3) {
-                reply('用法: **goto <x> <y> <z>');
+            if (args[0] && args[0].toLowerCase() === 'stop') {
+                flyGotoToken++;
+                reply(flyGotoActive ? '已请求停止空间寻路' : '当前没有进行中的空间寻路');
                 break;
             }
-            {
-                const x = parseInt(args[0]), y = parseInt(args[1]), z = parseInt(args[2]);
-                if (isNaN(x) || isNaN(y) || isNaN(z)) {
+            if (args.length === 2) {
+                // 平面寻路：**goto <x> <z>，保持当前高度
+                const x = parseInt(args[0]), z = parseInt(args[1]);
+                if (isNaN(x) || isNaN(z)) {
                     reply('坐标必须为整数');
+                    break;
+                }
+                const y = Math.floor(bot.entity.position.y);
+                // 目标可行性：目标位置是否被方块占据（地下/墙内）
+                if (isSolid(bot, new Vec3(x, y, z)) || isSolid(bot, new Vec3(x, y + 1, z))) {
+                    reply(`目标 (${x}, ${y}, ${z}) 被方块占据（在地下或墙内），无法到达`);
                     break;
                 }
                 if (!movements) break;
@@ -2116,36 +2775,67 @@ function executeCommand(line, playerName) {
                 bot.pathfinder.goto(new GoalBlock(x, y, z))
                     .then(() => { log('info', '到达目标'); reply('到达目标'); })
                     .catch(err => { log('warn', `寻路失败: ${err.message}`); reply(`寻路失败: ${err.message}`); });
+            } else if (args.length === 3) {
+                // 空间寻路：**goto <x> <y> <z>，飞行直达（含墙后绕行）
+                const x = parseInt(args[0]), y = parseInt(args[1]), z = parseInt(args[2]);
+                if (isNaN(x) || isNaN(y) || isNaN(z)) {
+                    reply('坐标必须为整数');
+                    break;
+                }
+                if (!botCanFly(bot)) {
+                    reply('空间寻路需要创造/旁观模式（飞行）');
+                    break;
+                }
+                const target = new Vec3(x, y, z);
+                // 目标可行性：地下/墙内检测
+                if (!canOccupy(bot, target)) {
+                    reply(`目标 (${x}, ${y}, ${z}) 被方块占据（在地下或墙内），无法飞行到达`);
+                    break;
+                }
+                // 墙后检测：直线不通则尝试绕行，绕不了就提示
+                if (!lineClear(bot, bot.entity.position, target)) {
+                    const detour = tryClimbDetour(bot, bot.entity.position, target);
+                    const raw = detour ? null : aStar3D(bot, bot.entity.position, target);
+                    if (!detour && !raw) {
+                        reply(`目标 (${x}, ${y}, ${z}) 在墙后且无法规划绕行路径，寻路不可行`);
+                        break;
+                    }
+                    reply(`目标在墙后，已规划${detour ? '简单' : 'A*'}绕行路径，开始飞行`);
+                }
+                const token = ++flyGotoToken;
+                stopMove();
+                bot.pathfinder.stop();
+                reply(`开始空间寻路 → (${x}, ${y}, ${z})（**goto stop 停止）`);
+                flyGotoLoop(token, target, reply).catch(err => log('error', `空间寻路失败: ${err.message}`));
+            } else {
+                reply('用法: **goto <x> <z>（平面寻路）或 **goto <x> <y> <z>（空间飞行寻路），**goto stop 停止');
             }
             break;
         case 'follow':
             if (args.length === 0) {
-                reply('用法: **follow <玩家名> [距离] [keep]');
+                reply('用法: **follow <玩家名> [距离]，**follow stop 停止');
+                break;
+            }
+            if (args[0].toLowerCase() === 'stop') {
+                flyFollowToken++;
+                reply(flyFollowActive ? '已请求停止跟随' : '当前没有进行中的跟随');
                 break;
             }
             {
-                if (!movements) break;
                 const targetName = args[0];
-                const target = bot.players[targetName];
-                if (!target || !target.entity) { reply(`找不到玩家: ${targetName}`); break; }
-                const dist = args.length > 1 && args[1].toLowerCase() !== 'keep' ? parseFloat(args[1]) : 2;
-                if (args.length > 1 && args[1].toLowerCase() !== 'keep' && (isNaN(dist) || dist < 0)) {
-                    reply('距离必须大于等于0');
+                if (!bot.players[targetName]) {
+                    reply(`找不到玩家: ${targetName}（可能不在线或不在玩家列表）`);
                     break;
                 }
-                const isKeep = args.some(a => a.toLowerCase() === 'keep');
-                stopMove();
-                if (isKeep) {
-                    stopKeepFollow();
-                    keepFollowTarget = targetName;
-                    reply(`开始持续跟随玩家: ${targetName}，距离: ${dist}`);
-                    keepFollowLoop(targetName, dist);
-                } else {
-                    bot.pathfinder.setMovements(movements);
-                    bot.pathfinder.goto(new GoalFollow(target.entity, dist))
-                        .then(() => { log('info', '到达目标附近'); reply('到达目标附近'); })
-                        .catch(err => { log('warn', `跟随失败: ${err.message}`); reply(`跟随失败: ${err.message}`); });
+                const dist = args.length > 1 ? parseFloat(args[1]) : 3;
+                if (isNaN(dist) || dist < 1 || dist > 16) {
+                    reply('距离范围: 1-16');
+                    break;
                 }
+                stopMove();
+                const token = ++flyFollowToken;
+                reply(`开始持续跟随 ${targetName}（距离 ${dist}，**follow stop 停止）`);
+                flyFollowLoop(token, targetName, dist, reply).catch(err => log('error', `跟随失败: ${err.message}`));
             }
             break;
         case 'attack':
