@@ -8,14 +8,18 @@
  * 与 playnbs 同一发声机制，但直接播放 .mid，省去中间转换。
  *
  * 用法:
- *   **run playmidi <歌曲.mid> | <速度> | <模式> | notempo   播放（参数用 | 分隔）
- *   **run playmidi stop                                     停止
- *   **run playmidi list                                     列出 midi/ 目录下的文件
+ *   **run playmidi <歌曲.mid> | [1bot] | <速度> | <模式> | notempo   播放（参数用 | 分隔）
+ *   **run playmidi stop                                              停止
+ *   **run playmidi list                                              列出 midi/ 目录下的文件
  *
  * 参数（均可省略，用 | 分隔）:
+ *   1bot（歌曲名后）: 强制单 bot 演奏，不开小号
  *   速度: 0.25-4，默认 1（原速）
  *   模式: pitch（默认，按音高分配乐器）| auto（按轨道）| 0-15（固定乐器）
  *   notempo: 忽略 MIDI 变速事件，按固定 120BPM 播放
+ *
+ * 多 bot：与 playnbs 同款——按 100ms 窗口峰值 + 均值计算需要的 bot 数（上限 4），
+ * 音符密集时自动开小号分担（验证码 → 注册 → 登录 → 切键盘 → 传送到主 bot）。
  *
  * 注意:
  *   - MIDI 音符无时长概念，note_off 忽略（与 NBS 一致，触发一声）
@@ -30,9 +34,17 @@ const midiCommonPath = require.resolve('./lib/midi_common');
 delete require.cache[midiCommonPath];
 const midiCommon = require(midiCommonPath);
 const parseArgs = require('./lib/parse_args');
+// 强制重载共享模块（server.js 只清理脚本自身的缓存，依赖模块需要手动清）
+const childBotPath = require.resolve('./lib/child_bot');
+delete require.cache[childBotPath];
+const { createChildBot, makeRateLimiter, MAX_PACKETS_PER_SEC } = require(childBotPath);
+// 最多同时使用的 bot 数（1 主 + 9 小号）
+const MAX_BOTS = 10;
 
 const MIDI_DIR = path.resolve(__dirname, '..', 'midi');
 const FLAG_KEY = 'playmidi';
+// 单个 bot 同时承担的并发音符上限（与 playnbs 一致）
+const POLYPHONY_THRESHOLD = 2.3;
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,6 +52,25 @@ function sleep(ms) {
 
 function isAlive(bot) {
     return bot && bot.entity && bot._client && !bot._client.ended;
+}
+
+function quitPlaymidiChildren(bot) {
+    const list = bot.__playmidiChildren || [];
+    for (const c of list) {
+        try { if (c && c._client && !c._client.ended) c.quit(); } catch (e) {}
+    }
+    bot.__playmidiChildren = [];
+}
+
+// 每个 bot 独立的发包限速器（服务端有发包频率限制，超了会被踢）
+const botLimiters = new Map();
+function limiterFor(bot) {
+    let lim = botLimiters.get(bot);
+    if (!lim) {
+        lim = makeRateLimiter();
+        botLimiters.set(bot, lim);
+    }
+    return lim;
 }
 
 // 构建播放时间轴：tempo 感知（ignoreTempo=true 时忽略所有变速，按固定 120BPM 计算）
@@ -97,13 +128,22 @@ function buildTimeline(midiBuf, speed, instMode = 'auto', ignoreTempo = false) {
 }
 
 module.exports = async function (bot, context) {
-    const { reply, args, log } = context;
+    const { reply, args, log, config } = context;
     if (!bot.__scriptFlags) bot.__scriptFlags = {};
-    const sub = (args[0] || '').toLowerCase();
+    if (!bot.__playmidiChildren) bot.__playmidiChildren = [];
+    // 参数用 | 分隔；歌曲名后的参数可为 1bot/single/solo 强制单 bot 演奏
+    const params = parseArgs(args);
+    let singleBot = false;
+    if (params[1] && /^(1bot|single|solo)$/i.test(params[1])) {
+        singleBot = true;
+        params.splice(1, 1);
+    }
+    const sub = (params[0] || '').toLowerCase();
 
     if (sub === 'stop') {
         bot.__scriptFlags[FLAG_KEY] = true;
         bot.__playmidiToken = (bot.__playmidiToken || 0) + 1; // 也取消并发播放循环
+        quitPlaymidiChildren(bot);
         reply('已请求停止播放');
         return;
     }
@@ -117,14 +157,14 @@ module.exports = async function (bot, context) {
         return;
     }
     if (!sub || sub === 'help') {
-reply('用法: **run playmidi <歌曲.mid> | <速度> | <模式> | notempo | stop | list');
+reply('用法: **run playmidi <歌曲.mid> | [1bot] | <速度> | <模式> | notempo | stop | list');
         return;
     }
 
     // 参数用 | 分隔（曲名可含空格）
-    const [fileName = '', speedStr = '', modeStr = '', tempoStr = ''] = parseArgs(args);
+    const [fileName = '', speedStr = '', modeStr = '', tempoStr = ''] = params;
     if (!fileName) {
-        reply('用法: **run playmidi <歌曲.mid> | <速度> | <模式> | notempo | stop | list');
+        reply('用法: **run playmidi <歌曲.mid> | [1bot] | <速度> | <模式> | notempo | stop | list');
         return;
     }
     const speed = speedStr ? parseFloat(speedStr) : 1;
@@ -198,10 +238,57 @@ reply('用法: **run playmidi <歌曲.mid> | <速度> | <模式> | notempo | sto
 
     const duration = timeline.length ? timeline[timeline.length - 1].seconds : 0;
     reply(`开始播放 ${path.basename(target)}（${timeline.length} 个音符，预计 ${duration.toFixed(1)}s${ignoreTempo ? '，已忽略变速' : ''}，**run playmidi stop 停止）`);
+
+    // 多 bot：按最密 100ms 窗口的多音度 + 最密处发包速率算，兼顾均值，上限 MAX_BOTS（1bot 参数强制单 bot）
+    const WINDOW = 0.1;
+    const bucketCounts = new Map();
+    for (const n of timeline) {
+        const b = Math.floor(n.seconds / WINDOW);
+        bucketCounts.set(b, (bucketCounts.get(b) || 0) + 1);
+    }
+    const maxWindow = bucketCounts.size ? Math.max(...bucketCounts.values()) : 0;
+    const avgWindow = duration > 0 ? timeline.length / (duration / WINDOW) : 0;
+    const peakPerSec = maxWindow / WINDOW;
+    const avgPerSec = avgWindow / WINDOW;
+    const needByRate = Math.ceil(Math.max(peakPerSec, avgPerSec) / MAX_PACKETS_PER_SEC);
+    const needByPoly = Math.ceil(maxWindow / POLYPHONY_THRESHOLD);
+    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, needByRate, needByPoly));
+    if (singleBot) log('info', '[playmidi] 已强制单 bot 演奏');
+    else if (botNum > 1) log('info', `[playmidi] 峰值每 100ms ${maxWindow} 个音符（${peakPerSec.toFixed(0)} 音符/秒），需要 ${botNum} 个 bot`);
+
+    // 先退出旧小号，再串行创建新小号（失败不影响主 bot 播放）
+    quitPlaymidiChildren(bot);
+    if (botNum > 1) {
+        for (let k = 1; k < botNum; k++) {
+            if (bot.__scriptFlags[FLAG_KEY]) break; // **stop 后不再创建新小号
+            const child = await createChildBot(bot, k, config, () => !!bot.__scriptFlags[FLAG_KEY]).catch(() => null);
+            if (bot.__scriptFlags[FLAG_KEY]) {
+                // 创建期间被 stop：退掉刚创建的小号
+                if (child) { try { child.quit(); } catch (e) {} }
+                break;
+            }
+            if (child) {
+                bot.__playmidiChildren.push(child);
+                log('info', `子 bot ${child.username} 已就绪`);
+            } else {
+                log('warn', `子 bot ${k} 登录失败，继续用现有 bot 播放`);
+            }
+        }
+    }
+
+    // 创建期间被 stop：退掉所有小号，不再开始播放
+    if (bot.__scriptFlags[FLAG_KEY]) {
+        quitPlaymidiChildren(bot);
+        return;
+    }
+
+    // 小号就绪后再切 unicode 键盘
     try { bot.chat('/piano keyboard unicode'); } catch (e) {}
 
     bot.__scriptFlags[FLAG_KEY] = false;
     const playToken = (bot.__playmidiToken = (bot.__playmidiToken || 0) + 1);
+    // 小号在前、主 bot 兜底（与 playnbs 一致）
+    const botList = [...bot.__playmidiChildren, bot];
     const start = performance.now();
     let transId = 1;
     let i = 0;
@@ -218,20 +305,25 @@ reply('用法: **run playmidi <歌曲.mid> | <速度> | <模式> | notempo | sto
         if (now < targetSec * 1000) {
             await sleep(targetSec * 1000 - now);
         }
-        // 发送当前时间点的所有音符
+        // 发送当前时间点的所有音符（多 bot 均匀分发，掉线自动剔除）
+        const senders = botList.filter((b) => b && isAlive(b));
+        if (senders.length === 0) break;
+        let sendIdx = 0;
         while (i < timeline.length && timeline[i].seconds <= targetSec + 0.002) {
             const n = timeline[i++];
-        const resolved = midiCommon.resolveNote(n.channel, n.pitch, instMode, fixedInstrument, n.trackInst);
-        const key = resolved.key;
-        const inst = resolved.instrument;
+            const resolved = midiCommon.resolveNote(n.channel, n.pitch, instMode, fixedInstrument, n.trackInst);
+            const key = resolved.key;
+            const inst = resolved.instrument;
             const ch = midiCommon.charForNote(inst, key);
             if (ch) {
+                const sender = senders[sendIdx % senders.length];
+                sendIdx++;
+                // 每个 bot 独立限速，防止“发包过多”被踢
+                await limiterFor(sender)();
                 try {
-                    bot._client.write('tab_complete', { transactionId: transId++, text: '/// ' + ch });
+                    sender._client.write('tab_complete', { transactionId: transId++, text: '/// ' + ch });
                     played++;
                 } catch (e) {}
-                // 同时刻多个音符分开发送，避免突发把服务器插件打崩
-                await sleep(15);
             }
         }
         // 经过变速点：记录实际变速时刻
@@ -241,6 +333,7 @@ reply('用法: **run playmidi <歌曲.mid> | <速度> | <模式> | notempo | sto
         }
     }
 
+    quitPlaymidiChildren(bot);
     bot.__scriptFlags[FLAG_KEY] = false;
     reply(`播放结束（共发出 ${played} 个音符）`);
 };

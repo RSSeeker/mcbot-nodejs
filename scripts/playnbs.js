@@ -11,9 +11,9 @@
  *   4. 按谱面曲速逐 tick 播放，平均音符多时自动多开小号分担（多音响度）
  *
  * 用法（游戏内聊天，经 **run 调用）：
- *   **run playnbs <歌曲名.nbs>      播放 songs/ 目录下的歌曲（可省略 .nbs 后缀）
- *   **run playnbs stop              停止当前播放并下线小号
- *   **run playnbs list [关键词]     列出 / 搜索歌曲
+ *   **run playnbs <歌曲名.nbs> | [1bot]   播放 songs/ 目录下的歌曲（1bot 强制单 bot 演奏）
+ *   **run playnbs stop                    停止当前播放并下线小号
+ *   **run playnbs list | [关键词]         列出 / 搜索歌曲
  *
  * 歌曲文件放到项目根目录的 songs/ 文件夹下。
  */
@@ -22,6 +22,12 @@ const fs = require('fs');
 const path = require('path');
 const { fromArrayBuffer } = require('@nbsjs/core');
 const parseArgs = require('./lib/parse_args');
+// 强制重载共享模块（server.js 只清理脚本自身的缓存，依赖模块需要手动清）
+const childBotPath = require.resolve('./lib/child_bot');
+delete require.cache[childBotPath];
+const { createChildBot, makeRateLimiter, MAX_PACKETS_PER_SEC } = require(childBotPath);
+// 最多同时使用的 bot 数（1 主 + 9 小号）
+const MAX_BOTS = 10;
 const instrCharMap = {
   0: "一丁丂七丄丅丆万丈三上下丌不与丏丐丑丒专且丕世丗丘丙业丛东丝丞丟丠両丢丣两严並丧丨丩个丫丬中丮丯丰丱串丳临丵丶丷丸丹为主丼丽举丿乀乁乂乃乄久乆乇么义乊之乌乍乎乏乐乑乒乓乔乕乖乗".split(''),
   1: "亀亁亂亃亄亅了亇予争亊事二亍于亏亐云互亓五井亖亗亘亙亚些亜亝亞亟亠亡亢亣交亥亦产亨亩亪享京亭亮亯亰亱亲亳亴亵亶亷亸亹人亻亼亽亾亿什仁仂仃仄仅仆仇仈仉今介仌仍从仏仐仑仒仓仔仕他仗".split(''),
@@ -45,11 +51,6 @@ const SONG_DIR = path.resolve(__dirname, '..', 'songs');
 const PLAY_PREFIX = '/// ';
 // 单个 bot 每 tick 最多承担的音符数（超过就开小号，参照 WeeaxeBot）
 const POLYPHONY_THRESHOLD = 2.3;
-// 最多同时使用的 bot 数（1 主 + 3 小号），避免小号过多导致注册/掉线问题
-const MAX_BOTS = 4;
-// 子 bot 登录 + 传送等待时间（毫秒）
-const CHILD_LOGIN_WAIT = 5000;
-
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -99,31 +100,15 @@ function isClientAlive(target) {
     return target && target._client && !target._client.ended;
 }
 
-// 等小号收到匹配的消息（用于确认注册/登录完成），带超时兜底
-function waitChildMessage(child, pattern, timeoutMs) {
-    return new Promise((resolve) => {
-        let done = false;
-        const finish = () => {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            child.removeListener('message', onMsg);
-            child.removeListener('chat', onChat);
-            resolve();
-        };
-        const timer = setTimeout(finish, timeoutMs);
-        const onMsg = (jsonMsg) => {
-            try {
-                const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
-                if (pattern.test(text)) finish();
-            } catch (e) {}
-        };
-        const onChat = (name, msg) => {
-            if (pattern.test(String(msg || ''))) finish();
-        };
-        child.on('message', onMsg);
-        child.on('chat', onChat);
-    });
+// 每个 bot 独立的发包限速器（服务端有发包频率限制，超了会被踢）
+const botLimiters = new Map();
+function limiterFor(bot) {
+    let lim = botLimiters.get(bot);
+    if (!lim) {
+        lim = makeRateLimiter();
+        botLimiters.set(bot, lim);
+    }
+    return lim;
 }
 
 // 预处理：把每一 tick 上所有层里的音符，转换成 "/// 字符" 形式
@@ -147,103 +132,7 @@ function buildTabList(song) {
     return rows;
 }
 
-// 创建子 bot：同一服务器、offline 模式，先过验证码再注册，然后切 unicode 键盘并传送到主 bot
-async function createChildBot(bot, index, config) {
-    const mineflayer = require('mineflayer');
-    const username = bot.username + index; // 序号命名：主名+序号（如 RS_Bot1、RS_Bot2）
-    const child = mineflayer.createBot({
-        host: config.server.host,
-        port: parseInt(config.server.port, 10),
-        username,
-        auth: 'offline',
-        version: String(config.server.version || '1.21.4'),
-        hideErrors: true,
-    });
-    const password = config.bot.password || '';
-
-    // 服务器可能要求先输验证码（/captcha <code>）才能注册
-    let captchaSent = false;
-    let abandoned = false;
-    const handleCaptchaText = (text) => {
-        if (!text || captchaSent || abandoned) return;
-        const s = String(text);
-        // 只响应服务器下发的验证码请求（带“验证码/注册”等语境），
-        // 避免把自己发出的 /captcha 回显当成新请求导致死循环
-        if (!/captcha/i.test(s) || !/验证码|注册|请使用|请输入|require|register/i.test(s)) return;
-        const m = s.match(/\/captcha\s+([A-Za-z0-9]+)/i);
-        if (m) {
-            captchaSent = true;
-            try { child.chat('/captcha ' + m[1]); } catch (e) {}
-        }
-    };
-    child.on('message', (jsonMsg) => {
-        try {
-            const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
-            handleCaptchaText(text);
-        } catch (e) {}
-    });
-    child.on('chat', (name, msg) => handleCaptchaText(msg));
-
-    let spawned = false;
-    let resolveReady;
-    const readyPromise = new Promise((res) => { resolveReady = res; });
-    child.on('spawn', () => {
-        if (abandoned) return;
-        spawned = true;
-
-        // 依次：等验证码 → 注册（等确认） → 登录（等确认） → 切 unicode 键盘 → 传送到大号旁边
-        const setup = async () => {
-            if (abandoned) return;
-            try {
-                if (password) {
-                    child.chat(`/register ${password} ${password}`);
-                    // 注册成功或已注册过则继续
-                    await waitChildMessage(child, /注册成功|注册完成|已注册|你已经登陆过了/, 2500);
-                    if (abandoned) return;
-                    child.chat(`/login ${password}`);
-                    // 登录成功则继续
-                    await waitChildMessage(child, /登录成功|已成功登录|已登录|欢迎回来/, 2500);
-                    if (abandoned) return;
-                }
-                child.chat('/piano keyboard unicode');
-                await sleep(600);
-                if (abandoned) return;
-                // 直接传送到主 bot 本体
-                child.chat('/tp ' + bot.username);
-            } catch (e) { /* 忽略 */ }
-            resolveReady();
-        };
-
-        const start = Date.now();
-        const waitTimer = setInterval(() => {
-            if (abandoned) { clearInterval(waitTimer); return; }
-            if (captchaSent || Date.now() - start > 6000) {
-                clearInterval(waitTimer);
-                // 发出验证码后稍等再注册，保证指令顺序
-                setTimeout(() => setup().catch(() => resolveReady()), captchaSent ? 800 : 0);
-            }
-        }, 200);
-    });
-    child.on('error', () => {});
-    child.on('kicked', () => {});
-
-    // 等待出生（最多 CHILD_LOGIN_WAIT 毫秒），失败则放弃该小号
-    const deadline = Date.now() + CHILD_LOGIN_WAIT;
-    while (!spawned && Date.now() < deadline) await sleep(100);
-    if (!spawned) {
-        // 防止“僵尸小号”晚到连接后继续注册/切键/传送，干扰服务端状态
-        abandoned = true;
-        try { child.removeAllListeners(); } catch (e) {}
-        try { child.end(); } catch (e) {}
-        try { child.quit(); } catch (e) {}
-        return null;
-    }
-    // 等注册/登录/传送流程完成（最多 8 秒），确保小号就绪再开始播放
-    await Promise.race([readyPromise, sleep(8000)]);
-    return child;
-}
-
-async function playNBS(bot, session, filePath, reply, log, config) {
+async function playNBS(bot, session, filePath, reply, log, config, singleBot = false) {
     // 先停掉上一次播放
     const oldChildren = stopPlayback(bot, null);
     const token = ++session.token;
@@ -285,25 +174,25 @@ async function playNBS(bot, session, filePath, reply, log, config) {
     const avgNotes = totalNotes / Math.max(1, songLength);
     const maxPerTick = Math.max(...rows.map((r) => r.length), 0);
 
-    // 需要几个 bot：按峰值（最密的 tick）算，兼顾均值，上限 MAX_BOTS
-    const needByPeak = Math.ceil(maxPerTick / POLYPHONY_THRESHOLD);
-    const needByAvg = Math.ceil(avgNotes / POLYPHONY_THRESHOLD);
-    const botNum = Math.min(MAX_BOTS, Math.max(1, needByPeak, needByAvg));
-    log('info', `音符总数 ${totalNotes}，平均每 tick ${avgNotes.toFixed(2)} 个，峰值 ${maxPerTick} 个，需要 ${botNum} 个 bot`);
+    // 需要几个 bot：按最密 tick 的多音度 + 最密处的发包速率（每 bot 限速）算，兼顾均值，上限 MAX_BOTS
+    const needByPoly = Math.ceil(maxPerTick / POLYPHONY_THRESHOLD);
+    const ticksPerSec = 1000 / songSpeed;
+    const peakPerSec = maxPerTick * ticksPerSec;
+    const avgPerSec = avgNotes * ticksPerSec;
+    const needByRate = Math.ceil(Math.max(peakPerSec, avgPerSec) / MAX_PACKETS_PER_SEC);
+    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, needByPoly, needByRate));
+    log('info', `音符总数 ${totalNotes}，平均每 tick ${avgNotes.toFixed(2)} 个，峰值 ${maxPerTick} 个（${peakPerSec.toFixed(0)} 音符/秒），需要 ${botNum} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
 
-    // 并行创建小号（各自独立连接/注册），失败不影响主 bot 播放
+    // 串行创建小号（各自独立连接/注册），失败不影响主 bot 播放
     if (botNum > 1) {
-        const tasks = [];
         for (let k = 1; k < botNum; k++) {
-            tasks.push(
-                createChildBot(bot, k, config).then(
-                    (child) => ({ k, child }),
-                    () => ({ k, child: null })
-                )
-            );
-        }
-        const results = await Promise.all(tasks);
-        for (const { k, child } of results) {
+            if (token !== session.token) break; // **stop 后不再创建新小号
+            const child = await createChildBot(bot, k, config, () => token !== session.token).catch(() => null);
+            if (token !== session.token) {
+                // 创建期间被 stop：退掉刚创建的小号
+                if (child) { try { child.quit(); } catch (e) {} }
+                break;
+            }
             if (child) {
                 session.childBots.push({ token, child });
                 log('info', `子 bot ${child.username} 已就绪`);
@@ -348,8 +237,8 @@ async function playNBS(bot, session, filePath, reply, log, config) {
         for (let i = 0; i < row.length; i++) {
             if (token !== session.token) break;
             const sender = alive[i % alive.length];
-            // 连续发给同一个 bot 时保持 15ms 间隔防突发；不同 bot 并发发送无需等待
-            if (i > 0 && sender === alive[(i - 1) % alive.length]) await sleep(15);
+            // 每个 bot 独立限速，防止“发包过多”被踢
+            await limiterFor(sender)();
             try {
                 sender._client.write('tab_complete', {
                     transactionId: transactionId++,
@@ -387,8 +276,14 @@ function listSongs(keyword) {
 module.exports = async function (bot, context) {
     const { reply, args, log, config } = context;
     const session = getSession(bot);
-    // 参数用 | 分隔（曲名可含空格）
-    const [rawName = '', listKeyword = ''] = parseArgs(args);
+    // 参数用 | 分隔（曲名可含空格）；歌曲名后的参数可为 1bot/single/solo 强制单 bot 演奏
+    const params = parseArgs(args);
+    let singleBot = false;
+    if (params[1] && /^(1bot|single|solo)$/i.test(params[1])) {
+        singleBot = true;
+        params.splice(1, 1);
+    }
+    const [rawName = '', listKeyword = ''] = params;
     const sub = rawName.toLowerCase();
 
     if (sub === 'stop') {
@@ -408,7 +303,7 @@ module.exports = async function (bot, context) {
     if (sub === 'play') fileName = parseArgs(args).slice(1).join(' '); // 兼容 playnbs play | <歌名>
 
     if (!fileName || fileName === 'help') {
-        reply('用法: **run playnbs <歌曲名.nbs> | stop | list [关键词]');
+        reply('用法: **run playnbs <歌曲名.nbs> | [1bot] | stop | list | <关键词>（1bot 强制单 bot 演奏）');
         reply(`歌曲文件放到项目根目录 songs/ 文件夹（${SONG_DIR}）`);
         return;
     }
@@ -442,5 +337,5 @@ module.exports = async function (bot, context) {
     }
 
     reply(`开始播放: ${path.relative(SONG_DIR, target)}`);
-    await playNBS(bot, session, target, reply, log, config);
+    await playNBS(bot, session, target, reply, log, config, singleBot);
 };

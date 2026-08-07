@@ -2772,6 +2772,13 @@ function executeCommand(line, playerName) {
                 }
                 bot.__nbsSession.childBots = [];
             }
+            // playmidi 的小号也要一并下线
+            if (bot && bot.__playmidiChildren) {
+                for (const c of bot.__playmidiChildren) {
+                    try { if (c && c._client && !c._client.ended) c.quit(); } catch (e) {}
+                }
+                bot.__playmidiChildren = [];
+            }
             if (activeScript) {
                 activeScript.cancelled = true;
                 const stoppedName = activeScript.name;
