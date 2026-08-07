@@ -4,11 +4,11 @@
  * MIDI → NBS 转换脚本（自含 SMF 解析器，无需额外依赖）
  *
  * 用法:
- *   **run midi2nbs <歌曲.mid> [曲速tick/s] [模式]   转换（默认曲速 10 tick/s）
- *   **run midi2nbs convert <歌曲.mid> [曲速] [模式]  同上
- *   **run midi2nbs list                              列出 midi/ 目录下的文件
+ *   **run midi2nbs <歌曲.mid> | <曲速tick/s> | <模式>   转换（参数用 | 分隔，默认曲速 10 tick/s）
+ *   **run midi2nbs convert | <歌曲.mid> | <曲速> | <模式>  同上
+ *   **run midi2nbs list                                    列出 midi/ 目录下的文件
  *
- * 模式（第三参数）:
+ * 模式:
  *   pitch（默认）: 按音高六八度分配乐器——低音区贝斯、标准区立琴、高音区长笛/铃铛，总音域约 F#1-F#7（6 个八度）
  *   auto: 按轨道分配——一条轨道一个乐器（优先 program，否则按中位音高）
  *   0-15: 固定乐器
@@ -25,6 +25,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const parseArgs = require('./lib/parse_args');
 // 强制重载共用模块（server.js 只清理脚本自身的缓存，依赖模块需要手动清）
 const midiCommonPath = require.resolve('./lib/midi_common');
 delete require.cache[midiCommonPath];
@@ -117,7 +118,8 @@ function midiToNbs(midiBuf, nbsTempo = 10, instMode = 'auto', fixedInstrument) {
 
 module.exports = async function (bot, context) {
     const { reply, args, log } = context;
-    const sub = (args[0] || '').toLowerCase();
+    const p = parseArgs(args);
+    const sub = (p[0] || '').toLowerCase();
 
     if (sub === 'list') {
         if (!fs.existsSync(MIDI_DIR)) {
@@ -134,22 +136,20 @@ module.exports = async function (bot, context) {
     let instMode = 'pitch'; // 默认 pitch=按音高六八度分配 | auto=按轨道 | number=固定乐器
     let fixedInstrument;
     if (sub === 'convert') {
-        fileName = args[1];
-        nbsTempo = args[2] ? parseInt(args[2], 10) : 10;
-        if (args[3] !== undefined) {
-            if (args[3].toLowerCase() === 'pitch') instMode = 'pitch';
-            else if (args[3].toLowerCase() !== 'auto') fixedInstrument = parseInt(args[3], 10);
-        }
+        fileName = p[1] || '';
+        nbsTempo = p[2] ? parseInt(p[2], 10) : 10;
+        const m = (p[3] || '').toLowerCase();
+        if (m === 'pitch') instMode = 'pitch';
+        else if (m !== '' && m !== 'auto') fixedInstrument = parseInt(m, 10);
     } else {
-        fileName = sub;
-        nbsTempo = args[1] ? parseInt(args[1], 10) : 10;
-        if (args[2] !== undefined) {
-            if (args[2].toLowerCase() === 'pitch') instMode = 'pitch';
-            else if (args[2].toLowerCase() !== 'auto') fixedInstrument = parseInt(args[2], 10);
-        }
+        fileName = p[0] || '';
+        nbsTempo = p[1] ? parseInt(p[1], 10) : 10;
+        const m = (p[2] || '').toLowerCase();
+        if (m === 'pitch') instMode = 'pitch';
+        else if (m !== '' && m !== 'auto') fixedInstrument = parseInt(m, 10);
     }
     if (!fileName || fileName === 'help') {
-reply('用法: **run midi2nbs <歌曲.mid> [曲速] [模式] | convert <歌曲.mid> [曲速] [模式] | list（模式: pitch默认/auto/0-15）');
+reply('用法: **run midi2nbs <歌曲.mid> | <曲速> | <模式> | convert | <歌曲.mid> | <曲速> | <模式> | list（参数用 | 分隔，模式: pitch默认/auto/0-15）');
         return;
     }
     if (isNaN(nbsTempo) || nbsTempo < 1 || nbsTempo > 100) {

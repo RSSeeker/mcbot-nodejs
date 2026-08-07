@@ -58,8 +58,11 @@ async function tryPlaceTorch(bot, belowPos) {
 module.exports = async function (bot, context) {
     const { reply, args, log } = context;
     if (!bot.__scriptFlags) bot.__scriptFlags = {};
+    const parseArgs = require('./lib/parse_args');
+    // 参数用 | 分隔：方向 | 长度 | 宽 | 高
+    const [dirArg = 'forward', lenArg = '', widthArg = '', heightArg = ''] = parseArgs(args);
 
-    if ((args[0] || '').toLowerCase() === 'stop') {
+    if (dirArg.toLowerCase() === 'stop') {
         bot.__scriptFlags[FLAG_KEY] = true;
         reply('已请求停止挖矿');
         return;
@@ -70,14 +73,14 @@ module.exports = async function (bot, context) {
         return;
     }
 
-    const dir = (args[0] || 'forward').toLowerCase();
+    const dir = dirArg.toLowerCase();
     if (!['forward', 'back', 'left', 'right'].includes(dir)) {
-        reply('用法: **run mine <方向> [长度] [宽] [高]  方向: forward/back/left/right');
+        reply('用法: **run mine <方向> | <长度> | <宽> | <高>  方向: forward/back/left/right');
         return;
     }
-    const length = args[1] ? parseInt(args[1], 10) : 20;
-    const width = args[2] ? parseInt(args[2], 10) : 1;
-    const height = args[3] ? parseInt(args[3], 10) : 2;
+    const length = lenArg ? parseInt(lenArg, 10) : 20;
+    const width = widthArg ? parseInt(widthArg, 10) : 1;
+    const height = heightArg ? parseInt(heightArg, 10) : 2;
     if (Number.isNaN(length) || length < 1 || length > 200) { reply('长度范围: 1-200'); return; }
     if (Number.isNaN(width) || width < 1 || width > 9) { reply('宽度范围: 1-9'); return; }
     if (Number.isNaN(height) || height < 1 || height > 6) { reply('高度范围: 1-6'); return; }

@@ -20,8 +20,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { Vec3 } = require('vec3');
 const { fromArrayBuffer } = require('@nbsjs/core');
+const parseArgs = require('./lib/parse_args');
 const instrCharMap = {
   0: "一丁丂七丄丅丆万丈三上下丌不与丏丐丑丒专且丕世丗丘丙业丛东丝丞丟丠両丢丣两严並丧丨丩个丫丬中丮丯丰丱串丳临丵丶丷丸丹为主丼丽举丿乀乁乂乃乄久乆乇么义乊之乌乍乎乏乐乑乒乓乔乕乖乗".split(''),
   1: "亀亁亂亃亄亅了亇予争亊事二亍于亏亐云互亓五井亖亗亘亙亚些亜亝亞亟亠亡亢亣交亥亦产亨亩亪享京亭亮亯亰亱亲亳亴亵亶亷亸亹人亻亼亽亾亿什仁仂仃仄仅仆仇仈仉今介仌仍从仏仐仑仒仓仔仕他仗".split(''),
@@ -45,8 +45,10 @@ const SONG_DIR = path.resolve(__dirname, '..', 'songs');
 const PLAY_PREFIX = '/// ';
 // 单个 bot 每 tick 最多承担的音符数（超过就开小号，参照 WeeaxeBot）
 const POLYPHONY_THRESHOLD = 2.3;
+// 最多同时使用的 bot 数（1 主 + 3 小号），避免小号过多导致注册/掉线问题
+const MAX_BOTS = 4;
 // 子 bot 登录 + 传送等待时间（毫秒）
-const CHILD_LOGIN_WAIT = 3500;
+const CHILD_LOGIN_WAIT = 5000;
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -97,10 +99,6 @@ function isClientAlive(target) {
     return target && target._client && !target._client.ended;
 }
 
-function isSolidBlock(b) {
-    return b && b.shapes && b.shapes.length > 0;
-}
-
 // 等小号收到匹配的消息（用于确认注册/登录完成），带超时兜底
 function waitChildMessage(child, pattern, timeoutMs) {
     return new Promise((resolve) => {
@@ -126,38 +124,6 @@ function waitChildMessage(child, pattern, timeoutMs) {
         child.on('message', onMsg);
         child.on('chat', onChat);
     });
-}
-
-// 传送到大号旁边：优先找大号周围可站立且不挡头的位置，避免叠在大号身上
-function teleportNearMain(child, mainBot) {
-    const fallback = (x, y, z) => {
-        try { child.chat(`/tp ${x} ${y} ${z}`); } catch (e) {}
-    };
-    if (!mainBot || !mainBot.entity || !mainBot.entity.position) {
-        try { child.chat('/tp ' + (mainBot ? mainBot.username : '')); } catch (e) {}
-        return;
-    }
-    try {
-        const pos = mainBot.entity.position;
-        const y = Math.floor(pos.y);
-        const candidates = [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2]];
-        for (const [dx, dz] of candidates) {
-            const px = Math.floor(pos.x) + dx;
-            const pz = Math.floor(pos.z) + dz;
-            const feet = mainBot.blockAt(new Vec3(px, y, pz));
-            const head = mainBot.blockAt(new Vec3(px, y + 1, pz));
-            const below = mainBot.blockAt(new Vec3(px, y - 1, pz));
-            // 脚底和头顶都得是空的，且脚下有地面（站在实体方块上）
-            if (!isSolidBlock(feet) && !isSolidBlock(head) && isSolidBlock(below)) {
-                fallback(px, y, pz);
-                return;
-            }
-        }
-        // 都不可用就退而求其次：横向偏移一格（创造服不会摔死，音符照常触发）
-        fallback(Math.floor(pos.x) + 1, y, Math.floor(pos.z));
-    } catch (e) {
-        try { child.chat('/tp ' + mainBot.username); } catch (e2) {}
-    }
 }
 
 // 预处理：把每一 tick 上所有层里的音符，转换成 "/// 字符" 形式
@@ -242,7 +208,8 @@ async function createChildBot(bot, index, config) {
                 child.chat('/piano keyboard unicode');
                 await sleep(600);
                 if (abandoned) return;
-                teleportNearMain(child, bot);
+                // 直接传送到主 bot 本体
+                child.chat('/tp ' + bot.username);
             } catch (e) { /* 忽略 */ }
             resolveReady();
         };
@@ -316,13 +283,27 @@ async function playNBS(bot, session, filePath, reply, log, config) {
     const rows = buildTabList(song);
     const totalNotes = rows.reduce((sum, row) => sum + row.length, 0);
     const avgNotes = totalNotes / Math.max(1, songLength);
-    const botNum = Math.max(1, Math.ceil(avgNotes / POLYPHONY_THRESHOLD));
-    log('info', `音符总数 ${totalNotes}，平均每 tick ${avgNotes.toFixed(2)} 个，需要 ${botNum} 个 bot`);
+    const maxPerTick = Math.max(...rows.map((r) => r.length), 0);
 
-    // 多音响度：音符密集时开小号分担
+    // 需要几个 bot：按峰值（最密的 tick）算，兼顾均值，上限 MAX_BOTS
+    const needByPeak = Math.ceil(maxPerTick / POLYPHONY_THRESHOLD);
+    const needByAvg = Math.ceil(avgNotes / POLYPHONY_THRESHOLD);
+    const botNum = Math.min(MAX_BOTS, Math.max(1, needByPeak, needByAvg));
+    log('info', `音符总数 ${totalNotes}，平均每 tick ${avgNotes.toFixed(2)} 个，峰值 ${maxPerTick} 个，需要 ${botNum} 个 bot`);
+
+    // 并行创建小号（各自独立连接/注册），失败不影响主 bot 播放
     if (botNum > 1) {
+        const tasks = [];
         for (let k = 1; k < botNum; k++) {
-            const child = await createChildBot(bot, k, config);
+            tasks.push(
+                createChildBot(bot, k, config).then(
+                    (child) => ({ k, child }),
+                    () => ({ k, child: null })
+                )
+            );
+        }
+        const results = await Promise.all(tasks);
+        for (const { k, child } of results) {
             if (child) {
                 session.childBots.push({ token, child });
                 log('info', `子 bot ${child.username} 已就绪`);
@@ -343,10 +324,9 @@ async function playNBS(bot, session, filePath, reply, log, config) {
     // 小号在前、主 bot 兜底（与 WeeaxeBot 一致）
     const botList = [...session.childBots.map((e) => e.child), bot];
 
-    // 逐 tick 播放
+    // 逐 tick 播放：每 tick 从当前存活 bot 里均匀分发，掉线自动剔除
     let nextTick = performance.now();
     let transactionId = 1;
-    let pointer = 0;
     for (let j = 0; j < rows.length; j++) {
         if (token !== session.token) break; // 停止控制
         if (!isClientAlive(bot)) {
@@ -355,30 +335,28 @@ async function playNBS(bot, session, filePath, reply, log, config) {
         }
 
         const now = performance.now();
-        let waitMs = Math.ceil(nextTick - now);
-        // 上一 tick 音符越多发包越耗时，这里提前扣掉（WeeaxeBot 的补偿技巧）
-        const prevLen = j > 0 ? rows[j - 1].length : 0;
-        if (prevLen) waitMs -= 0.7 * prevLen;
+        // now 已包含上一 tick 的发包耗时，直接等下一个节拍即可，无需额外补偿
+        const waitMs = Math.ceil(nextTick - now);
         if (waitMs > 0) await sleep(waitMs);
         nextTick += songSpeed;
 
         const row = rows[j];
         if (!row || row.length === 0) continue;
-        for (let i = row.length - 1; i >= 0; i--) {
+
+        const alive = botList.filter((b) => b && isClientAlive(b));
+        if (alive.length === 0) break;
+        for (let i = 0; i < row.length; i++) {
             if (token !== session.token) break;
-            const sender = botList[pointer % botList.length];
-            pointer++;
-            if (sender && isClientAlive(sender)) {
-                try {
-                    sender._client.write('tab_complete', {
-                        transactionId: transactionId++,
-                        text: row[i],
-                    });
-                } catch (err) {
-                    log('warn', `发送音符失败: ${err.message}`);
-                }
-                // 同一 tick 的多个音符分开发送，避免突发把服务器插件打崩（internal error 踢人）
-                await sleep(15);
+            const sender = alive[i % alive.length];
+            // 连续发给同一个 bot 时保持 15ms 间隔防突发；不同 bot 并发发送无需等待
+            if (i > 0 && sender === alive[(i - 1) % alive.length]) await sleep(15);
+            try {
+                sender._client.write('tab_complete', {
+                    transactionId: transactionId++,
+                    text: row[i],
+                });
+            } catch (err) {
+                log('warn', `发送音符失败: ${err.message}`);
             }
         }
     }
@@ -409,7 +387,9 @@ function listSongs(keyword) {
 module.exports = async function (bot, context) {
     const { reply, args, log, config } = context;
     const session = getSession(bot);
-    const sub = (args[0] || '').toLowerCase();
+    // 参数用 | 分隔（曲名可含空格）
+    const [rawName = '', listKeyword = ''] = parseArgs(args);
+    const sub = rawName.toLowerCase();
 
     if (sub === 'stop') {
         stopPlayback(bot, reply);
@@ -417,15 +397,15 @@ module.exports = async function (bot, context) {
     }
 
     if (sub === 'list') {
-        const matched = listSongs(args[1]);
+        const matched = listSongs(listKeyword);
         reply(`songs/ 目录下共 ${matched.length} 首匹配歌曲：`);
         const names = matched.slice(0, 15).map((f) => '  ' + path.relative(SONG_DIR, f));
         reply(names.length ? names.join('\n') : '（没有找到 .nbs 文件，请先放歌到 songs/ 文件夹）');
         return;
     }
 
-    let fileName = sub;
-    if (fileName === 'play') fileName = (args[1] || '').trim(); // 兼容 playnbs play <歌名>
+    let fileName = rawName;
+    if (sub === 'play') fileName = parseArgs(args).slice(1).join(' '); // 兼容 playnbs play | <歌名>
 
     if (!fileName || fileName === 'help') {
         reply('用法: **run playnbs <歌曲名.nbs> | stop | list [关键词]');

@@ -37,8 +37,11 @@ function ensurePathfinder(bot) {
 module.exports = async function (bot, context) {
     const { reply, args, log } = context;
     if (!bot.__scriptFlags) bot.__scriptFlags = {};
+    const parseArgs = require('./lib/parse_args');
+    // 参数用 | 分隔：玩家名 | 半径
+    const [targetArg = '', radiusArg = ''] = parseArgs(args);
 
-    if ((args[0] || '').toLowerCase() === 'stop') {
+    if (targetArg.toLowerCase() === 'stop') {
         bot.__scriptFlags[FLAG_KEY] = true;
         reply('已请求停止守卫');
         return;
@@ -49,12 +52,12 @@ module.exports = async function (bot, context) {
         return;
     }
 
-    const targetName = args[0];
+    const targetName = targetArg;
     if (!targetName) {
-        reply('用法: **run guard <玩家名> [半径]');
+        reply('用法: **run guard <玩家名> | <半径>');
         return;
     }
-    const radius = args[1] ? parseFloat(args[1]) : 8;
+    const radius = radiusArg ? parseFloat(radiusArg) : 8;
     if (Number.isNaN(radius) || radius < 2 || radius > 32) {
         reply('半径范围: 2-32');
         return;

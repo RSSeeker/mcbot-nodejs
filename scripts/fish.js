@@ -23,8 +23,11 @@ function isAlive(bot) {
 module.exports = async function (bot, context) {
     const { reply, args, log } = context;
     if (!bot.__scriptFlags) bot.__scriptFlags = {};
+    const parseArgs = require('./lib/parse_args');
+    // 参数用 | 分隔：次数
+    const [roundsArg = ''] = parseArgs(args);
 
-    if ((args[0] || '').toLowerCase() === 'stop') {
+    if (roundsArg.toLowerCase() === 'stop') {
         bot.__scriptFlags[FLAG_KEY] = true;
         reply('已请求停止钓鱼，当前这竿钓完即停');
         return;
@@ -47,7 +50,7 @@ module.exports = async function (bot, context) {
         return;
     }
 
-    const maxRounds = args[0] ? parseInt(args[0], 10) : Infinity;
+    const maxRounds = roundsArg ? parseInt(roundsArg, 10) : Infinity;
     if (Number.isNaN(maxRounds) || maxRounds < 1) {
         reply('次数必须是正整数');
         return;

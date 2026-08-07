@@ -83,8 +83,11 @@ async function findBlockItem(bot, name) {
 module.exports = async function (bot, context) {
     const { reply, args, log } = context;
     if (!bot.__scriptFlags) bot.__scriptFlags = {};
+    const parseArgs = require('./lib/parse_args');
+    // 参数用 | 分隔：<fill|tower|road> | <参数...> | <方块>
+    const [subArg = '', ...rest] = parseArgs(args);
 
-    const sub = (args[0] || '').toLowerCase();
+    const sub = subArg.toLowerCase();
     if (sub === 'stop') {
         bot.__scriptFlags[FLAG_KEY] = true;
         reply('已请求停止建筑');
@@ -100,32 +103,32 @@ module.exports = async function (bot, context) {
     let blockName = 'stone';
 
     if (sub === 'fill') {
-        const nums = args.slice(1, 7).map(Number);
+        const nums = rest.slice(0, 6).map(Number);
         if (nums.length < 6 || nums.some(Number.isNaN)) {
-            reply('用法: **run build fill <x1> <y1> <z1> <x2> <y2> <z2> [方块]');
+            reply('用法: **run build fill | <x1> | <y1> | <z1> | <x2> | <y2> | <z2> | <方块>');
             return;
         }
         positions = rangeCells(...nums);
-        blockName = args[7] || 'stone';
+        blockName = rest[6] || 'stone';
     } else if (sub === 'tower') {
-        const x = Number(args[1]), y = Number(args[2]), z = Number(args[3]), h = Number(args[4]);
+        const x = Number(rest[0]), y = Number(rest[1]), z = Number(rest[2]), h = Number(rest[3]);
         if ([x, y, z, h].some(Number.isNaN) || h < 1 || h > 64) {
-            reply('用法: **run build tower <x> <y> <z> <高度> [方块]');
+            reply('用法: **run build tower | <x> | <y> | <z> | <高度> | <方块>');
             return;
         }
         positions = rangeCells(x, y, z, x, y + h - 1, z);
-        blockName = args[5] || 'stone';
+        blockName = rest[4] || 'stone';
     } else if (sub === 'road') {
-        const x1 = Number(args[1]), z1 = Number(args[2]), x2 = Number(args[3]), z2 = Number(args[4]);
+        const x1 = Number(rest[0]), z1 = Number(rest[1]), x2 = Number(rest[2]), z2 = Number(rest[3]);
         if ([x1, z1, x2, z2].some(Number.isNaN)) {
-            reply('用法: **run build road <x1> <z1> <x2> <z2> [方块]');
+            reply('用法: **run build road | <x1> | <z1> | <x2> | <z2> | <方块>');
             return;
         }
         const y = Math.floor(bot.entity.position.y) - 1;
         positions = roadCells(x1, z1, x2, z2, y);
-        blockName = args[5] || 'stone';
+        blockName = rest[4] || 'stone';
     } else {
-        reply('用法: **run build fill|tower|road ...（**run build 单独执行看用法，stop 停止）');
+        reply('用法: **run build <fill|tower|road> | <参数...> | <方块>（参数用 | 分隔；**run build stop 停止）');
         return;
     }
 

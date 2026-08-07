@@ -8,17 +8,14 @@
  * 与 playnbs 同一发声机制，但直接播放 .mid，省去中间转换。
  *
  * 用法:
- *   **run playmidi <歌曲.mid> [速度] [模式] [notempo]   播放（速度 0.25-4，默认 1）
- *   **run playmidi stop                                  停止
- *   **run playmidi list                                  列出 midi/ 目录下的文件
+ *   **run playmidi <歌曲.mid> | <速度> | <模式> | notempo   播放（参数用 | 分隔）
+ *   **run playmidi stop                                     停止
+ *   **run playmidi list                                     列出 midi/ 目录下的文件
  *
- * 模式（第三参数）:
- *   pitch（默认）: 按音高六八度分配乐器——低音区贝斯、标准区立琴、高音区长笛/铃铛
- *   auto: 按轨道分配——一条轨道一个乐器
- *   0-15: 固定乐器
- *
- * notempo（第三或第四参数）: 忽略 MIDI 里的变速事件，按固定 120BPM 播放
- *   （适合变速数据是导出残留/异常的歌曲，如 Alpha.mid）
+ * 参数（均可省略，用 | 分隔）:
+ *   速度: 0.25-4，默认 1（原速）
+ *   模式: pitch（默认，按音高分配乐器）| auto（按轨道）| 0-15（固定乐器）
+ *   notempo: 忽略 MIDI 变速事件，按固定 120BPM 播放
  *
  * 注意:
  *   - MIDI 音符无时长概念，note_off 忽略（与 NBS 一致，触发一声）
@@ -32,6 +29,7 @@ const path = require('path');
 const midiCommonPath = require.resolve('./lib/midi_common');
 delete require.cache[midiCommonPath];
 const midiCommon = require(midiCommonPath);
+const parseArgs = require('./lib/parse_args');
 
 const MIDI_DIR = path.resolve(__dirname, '..', 'midi');
 const FLAG_KEY = 'playmidi';
@@ -119,12 +117,17 @@ module.exports = async function (bot, context) {
         return;
     }
     if (!sub || sub === 'help') {
-reply('用法: **run playmidi <歌曲.mid> [速度] [模式] [notempo] | stop | list（模式: pitch默认/auto/0-15；加 notempo 忽略变速按 120BPM 播放）');
+reply('用法: **run playmidi <歌曲.mid> | <速度> | <模式> | notempo | stop | list');
         return;
     }
 
-    const fileName = sub;
-    const speed = args[1] ? parseFloat(args[1]) : 1;
+    // 参数用 | 分隔（曲名可含空格）
+    const [fileName = '', speedStr = '', modeStr = '', tempoStr = ''] = parseArgs(args);
+    if (!fileName) {
+        reply('用法: **run playmidi <歌曲.mid> | <速度> | <模式> | notempo | stop | list');
+        return;
+    }
+    const speed = speedStr ? parseFloat(speedStr) : 1;
     if (isNaN(speed) || speed < 0.25 || speed > 4) {
         reply('速度范围: 0.25-4（1 = 原速）');
         return;
@@ -132,22 +135,20 @@ reply('用法: **run playmidi <歌曲.mid> [速度] [模式] [notempo] | stop | 
     let instMode = 'pitch'; // 默认 pitch=按音高六八度分配 | auto=按轨道 | number=固定乐器
     let fixedInstrument;
     let ignoreTempo = false;
-    const modeArg = args[2] ? args[2].toLowerCase() : '';
-    if (modeArg !== '') {
-        if (modeArg === 'notempo' || modeArg === 'ignoretempo' || modeArg === 'none') {
-            ignoreTempo = true;
-        } else if (modeArg === 'pitch') {
-            instMode = 'pitch';
-        } else if (modeArg !== 'auto') {
-            fixedInstrument = parseInt(modeArg, 10);
-            if (isNaN(fixedInstrument) || fixedInstrument < 0 || fixedInstrument > 15) {
-                reply('乐器模式: pitch=按音高六八度分配（默认） | auto=按轨道 | 0-15=固定乐器 | 第三/四参数可加 notempo 忽略变速');
-                return;
-            }
+    const modeStrL = (modeStr || '').toLowerCase();
+    if (modeStrL === 'notempo' || modeStrL === 'ignoretempo' || modeStrL === 'none') {
+        ignoreTempo = true;
+    } else if (modeStrL === 'pitch') {
+        instMode = 'pitch';
+    } else if (modeStrL !== '' && modeStrL !== 'auto') {
+        fixedInstrument = parseInt(modeStrL, 10);
+        if (isNaN(fixedInstrument) || fixedInstrument < 0 || fixedInstrument > 15) {
+            reply('乐器模式: pitch=按音高六八度分配（默认） | auto=按轨道 | 0-15=固定乐器 | 可加 notempo 忽略变速');
+            return;
         }
     }
-    const tempoArg = args[3] ? args[3].toLowerCase() : '';
-    if (tempoArg === 'notempo' || tempoArg === 'ignoretempo' || tempoArg === 'none') ignoreTempo = true;
+    const tempoStrL = (tempoStr || '').toLowerCase();
+    if (tempoStrL === 'notempo' || tempoStrL === 'ignoretempo' || tempoStrL === 'none') ignoreTempo = true;
 
     if (!fs.existsSync(MIDI_DIR)) fs.mkdirSync(MIDI_DIR, { recursive: true });
     let target = path.resolve(MIDI_DIR, fileName);
