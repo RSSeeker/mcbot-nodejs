@@ -105,6 +105,7 @@ module.exports = async function (bot, context) {
 
     if (sub === 'stop') {
         bot.__scriptFlags[FLAG_KEY] = true;
+        bot.__playmidiToken = (bot.__playmidiToken || 0) + 1; // 也取消并发播放循环
         reply('已请求停止播放');
         return;
     }
@@ -199,13 +200,14 @@ reply('用法: **run playmidi <歌曲.mid> [速度] [模式] [notempo] | stop | 
     try { bot.chat('/piano keyboard unicode'); } catch (e) {}
 
     bot.__scriptFlags[FLAG_KEY] = false;
+    const playToken = (bot.__playmidiToken = (bot.__playmidiToken || 0) + 1);
     const start = performance.now();
     let transId = 1;
     let i = 0;
     let played = 0;
     let tempoLogIdx = 0;
 
-    while (!bot.__scriptFlags[FLAG_KEY] && i < timeline.length) {
+    while (!bot.__scriptFlags[FLAG_KEY] && playToken === bot.__playmidiToken && i < timeline.length) {
         if (!isAlive(bot)) {
             log('warn', 'Bot 已断开，停止播放');
             break;

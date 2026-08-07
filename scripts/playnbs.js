@@ -20,6 +20,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { Vec3 } = require('vec3');
 const { fromArrayBuffer } = require('@nbsjs/core');
 const instrCharMap = {
   0: "一丁丂七丄丅丆万丈三上下丌不与丏丐丑丒专且丕世丗丘丙业丛东丝丞丟丠両丢丣两严並丧丨丩个丫丬中丮丯丰丱串丳临丵丶丷丸丹为主丼丽举丿乀乁乂乃乄久乆乇么义乊之乌乍乎乏乐乑乒乓乔乕乖乗".split(''),
@@ -55,7 +56,7 @@ function sleep(ms) {
 // 只有挂在 bot 上，stop 命令才能中断正在播放的循环。
 function getSession(bot) {
     if (!bot.__nbsSession) {
-        bot.__nbsSession = { token: 0, childBots: [] };
+        bot.__nbsSession = { token: 0, childBots: [], playing: false };
     }
     return bot.__nbsSession;
 }
@@ -64,21 +65,99 @@ function stopPlayback(bot, reply) {
     const session = bot.__nbsSession;
     if (!session) {
         if (reply) reply('当前没有播放任务');
-        return false;
+        return [];
     }
     session.token++; // 让正在播放的循环立即退出
-    for (const child of session.childBots) {
+    session.playing = false;
+    const old = session.childBots;
+    session.childBots = [];
+    for (const entry of old) {
         try {
-            if (child && child._client && !child._client.ended) child.quit();
+            if (entry && entry.child && entry.child._client && !entry.child._client.ended) entry.child.quit();
         } catch (e) { /* 忽略子 bot 退出错误 */ }
     }
-    session.childBots = [];
     if (reply) reply('已停止播放');
-    return true;
+    return old.map((e) => e && e.child).filter(Boolean);
+}
+
+// 只清理属于本次播放（token）的小号，不递增 token，避免旧实例收尾时误杀新开始的播放
+function cleanupPlayback(bot, token) {
+    const session = bot.__nbsSession;
+    if (!session) return;
+    session.childBots = session.childBots.filter((entry) => {
+        if (!entry || entry.token !== token) return true;
+        try {
+            if (entry.child && entry.child._client && !entry.child._client.ended) entry.child.quit();
+        } catch (e) {}
+        return false;
+    });
 }
 
 function isClientAlive(target) {
     return target && target._client && !target._client.ended;
+}
+
+function isSolidBlock(b) {
+    return b && b.shapes && b.shapes.length > 0;
+}
+
+// 等小号收到匹配的消息（用于确认注册/登录完成），带超时兜底
+function waitChildMessage(child, pattern, timeoutMs) {
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            child.removeListener('message', onMsg);
+            child.removeListener('chat', onChat);
+            resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        const onMsg = (jsonMsg) => {
+            try {
+                const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
+                if (pattern.test(text)) finish();
+            } catch (e) {}
+        };
+        const onChat = (name, msg) => {
+            if (pattern.test(String(msg || ''))) finish();
+        };
+        child.on('message', onMsg);
+        child.on('chat', onChat);
+    });
+}
+
+// 传送到大号旁边：优先找大号周围可站立且不挡头的位置，避免叠在大号身上
+function teleportNearMain(child, mainBot) {
+    const fallback = (x, y, z) => {
+        try { child.chat(`/tp ${x} ${y} ${z}`); } catch (e) {}
+    };
+    if (!mainBot || !mainBot.entity || !mainBot.entity.position) {
+        try { child.chat('/tp ' + (mainBot ? mainBot.username : '')); } catch (e) {}
+        return;
+    }
+    try {
+        const pos = mainBot.entity.position;
+        const y = Math.floor(pos.y);
+        const candidates = [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2]];
+        for (const [dx, dz] of candidates) {
+            const px = Math.floor(pos.x) + dx;
+            const pz = Math.floor(pos.z) + dz;
+            const feet = mainBot.blockAt(new Vec3(px, y, pz));
+            const head = mainBot.blockAt(new Vec3(px, y + 1, pz));
+            const below = mainBot.blockAt(new Vec3(px, y - 1, pz));
+            // 脚底和头顶都得是空的，且脚下有地面（站在实体方块上）
+            if (!isSolidBlock(feet) && !isSolidBlock(head) && isSolidBlock(below)) {
+                fallback(px, y, pz);
+                return;
+            }
+        }
+        // 都不可用就退而求其次：横向偏移一格（创造服不会摔死，音符照常触发）
+        fallback(Math.floor(pos.x) + 1, y, Math.floor(pos.z));
+    } catch (e) {
+        try { child.chat('/tp ' + mainBot.username); } catch (e2) {}
+    }
 }
 
 // 预处理：把每一 tick 上所有层里的音符，转换成 "/// 字符" 形式
@@ -118,8 +197,9 @@ async function createChildBot(bot, index, config) {
 
     // 服务器可能要求先输验证码（/captcha <code>）才能注册
     let captchaSent = false;
+    let abandoned = false;
     const handleCaptchaText = (text) => {
-        if (!text || captchaSent) return;
+        if (!text || captchaSent || abandoned) return;
         const s = String(text);
         // 只响应服务器下发的验证码请求（带“验证码/注册”等语境），
         // 避免把自己发出的 /captcha 回显当成新请求导致死循环
@@ -139,24 +219,41 @@ async function createChildBot(bot, index, config) {
     child.on('chat', (name, msg) => handleCaptchaText(msg));
 
     let spawned = false;
+    let resolveReady;
+    const readyPromise = new Promise((res) => { resolveReady = res; });
     child.on('spawn', () => {
+        if (abandoned) return;
         spawned = true;
-        // 注册流程：先等验证码（最多 6 秒），发出验证码后稍等再注册
-        const register = () => {
+
+        // 依次：等验证码 → 注册（等确认） → 登录（等确认） → 切 unicode 键盘 → 传送到大号旁边
+        const setup = async () => {
+            if (abandoned) return;
             try {
                 if (password) {
                     child.chat(`/register ${password} ${password}`);
+                    // 注册成功或已注册过则继续
+                    await waitChildMessage(child, /注册成功|注册完成|已注册|你已经登陆过了/, 2500);
+                    if (abandoned) return;
                     child.chat(`/login ${password}`);
+                    // 登录成功则继续
+                    await waitChildMessage(child, /登录成功|已成功登录|已登录|欢迎回来/, 2500);
+                    if (abandoned) return;
                 }
                 child.chat('/piano keyboard unicode');
-                child.chat('/tp ' + bot.username);
+                await sleep(600);
+                if (abandoned) return;
+                teleportNearMain(child, bot);
             } catch (e) { /* 忽略 */ }
+            resolveReady();
         };
+
         const start = Date.now();
         const waitTimer = setInterval(() => {
+            if (abandoned) { clearInterval(waitTimer); return; }
             if (captchaSent || Date.now() - start > 6000) {
                 clearInterval(waitTimer);
-                setTimeout(register, captchaSent ? 800 : 0);
+                // 发出验证码后稍等再注册，保证指令顺序
+                setTimeout(() => setup().catch(() => resolveReady()), captchaSent ? 800 : 0);
             }
         }, 200);
     });
@@ -167,20 +264,38 @@ async function createChildBot(bot, index, config) {
     const deadline = Date.now() + CHILD_LOGIN_WAIT;
     while (!spawned && Date.now() < deadline) await sleep(100);
     if (!spawned) {
+        // 防止“僵尸小号”晚到连接后继续注册/切键/传送，干扰服务端状态
+        abandoned = true;
+        try { child.removeAllListeners(); } catch (e) {}
         try { child.end(); } catch (e) {}
         try { child.quit(); } catch (e) {}
         return null;
     }
-    // 留一点时间让 /login、/tp 生效
-    await sleep(800);
+    // 等注册/登录/传送流程完成（最多 8 秒），确保小号就绪再开始播放
+    await Promise.race([readyPromise, sleep(8000)]);
     return child;
 }
 
 async function playNBS(bot, session, filePath, reply, log, config) {
     // 先停掉上一次播放
-    stopPlayback(bot, null);
+    const oldChildren = stopPlayback(bot, null);
     const token = ++session.token;
-    session.childBots = [];
+    session.playing = true;
+
+    // 等待旧小号完全断开再建同名新小号，避免服务器端重复登录/键盘状态冲突
+    if (oldChildren.length) {
+        log('info', `等待 ${oldChildren.length} 个旧小号断开...`);
+        for (const c of oldChildren) {
+            if (c && c._client && !c._client.ended) {
+                try {
+                    await Promise.race([
+                        new Promise((res) => c.once('end', res)),
+                        sleep(2000),
+                    ]);
+                } catch (e) {}
+            }
+        }
+    }
 
     // 读取并解析 NBS
     let song;
@@ -197,9 +312,6 @@ async function playNBS(bot, session, filePath, reply, log, config) {
     const songName = song.name || path.basename(filePath);
     log('info', `正在播放: ${songName}，曲长 ${songLength} tick，速度 ${songSpeed}ms/tick，预计 ${(songLength * songSpeed / 1000).toFixed(1)}s`);
 
-    // 主 bot 切换 unicode 键盘（服务端钢琴插件）
-    try { bot.chat('/piano keyboard unicode'); } catch (e) {}
-
     // 预处理音符
     const rows = buildTabList(song);
     const totalNotes = rows.reduce((sum, row) => sum + row.length, 0);
@@ -211,18 +323,25 @@ async function playNBS(bot, session, filePath, reply, log, config) {
     if (botNum > 1) {
         for (let k = 1; k < botNum; k++) {
             const child = await createChildBot(bot, k, config);
-            session.childBots.push(child);
-            if (child) log('info', `子 bot ${child.username} 已就绪`);
-            else log('warn', `子 bot ${k} 登录失败，继续用现有 bot 播放`);
+            if (child) {
+                session.childBots.push({ token, child });
+                log('info', `子 bot ${child.username} 已就绪`);
+            } else {
+                log('warn', `子 bot ${k} 登录失败，继续用现有 bot 播放`);
+            }
         }
     }
     if (token !== session.token) {
-        stopPlayback(bot, null); // 等待小号期间被 stop 了
+        cleanupPlayback(bot, token); // 等待小号期间被 stop 了，只清自己的小号
         return;
     }
 
+    // 旧会话已完全停稳（旧小号断开、循环退出）后再切 unicode 键盘，
+    // 避免切键与旧会话的收尾/发包竞争导致服务端钢琴插件异常踢人
+    try { bot.chat('/piano keyboard unicode'); } catch (e) {}
+
     // 小号在前、主 bot 兜底（与 WeeaxeBot 一致）
-    const botList = [...session.childBots.filter(Boolean), bot];
+    const botList = [...session.childBots.map((e) => e.child), bot];
 
     // 逐 tick 播放
     let nextTick = performance.now();
@@ -266,7 +385,8 @@ async function playNBS(bot, session, filePath, reply, log, config) {
 
     // 收尾：下掉小号、复位状态
     const finished = token === session.token;
-    stopPlayback(bot, null);
+    cleanupPlayback(bot, token);
+    session.playing = false;
     if (finished) reply(`播放结束: ${songName}`);
 }
 
@@ -310,6 +430,13 @@ module.exports = async function (bot, context) {
     if (!fileName || fileName === 'help') {
         reply('用法: **run playnbs <歌曲名.nbs> | stop | list [关键词]');
         reply(`歌曲文件放到项目根目录 songs/ 文件夹（${SONG_DIR}）`);
+        return;
+    }
+
+    // 播放中禁止再次启动：服务器端会在重复启动时把 bot 踢下线（internal error），
+    // 需要先 **run playnbs stop 再播放新歌
+    if (session.playing) {
+        reply('正在播放中，请先 **run playnbs stop 再重新播放');
         return;
     }
 

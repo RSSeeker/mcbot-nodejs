@@ -2767,7 +2767,8 @@ function executeCommand(line, playerName) {
             if (bot && bot.__nbsSession) {
                 bot.__nbsSession.token++;
                 for (const child of bot.__nbsSession.childBots || []) {
-                    try { if (child && child._client && !child._client.ended) child.quit(); } catch (e) {}
+                    const c = child && child.child ? child.child : child;
+                    try { if (c && c._client && !c._client.ended) c.quit(); } catch (e) {}
                 }
                 bot.__nbsSession.childBots = [];
             }
