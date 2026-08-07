@@ -22,6 +22,7 @@ config.json
 
 # 演奏脚本（NBS 播放脚本，映射表已内嵌）
 scripts/playnbs.js
+scripts/playmidi.js
 
 # 歌曲库
 songs/
