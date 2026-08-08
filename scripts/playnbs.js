@@ -114,114 +114,133 @@ function waitChildMessage(child, pattern, timeoutMs) {
 // 返回 child；5 秒内没 spawn 则判定登录失败返回 null
 async function createChildBot(bot, index, config, isCancelled = () => false, log = null) {
     const mineflayer = require('mineflayer');
-    const username = bot.username + index; // 序号命名：主名+序号
-    const child = mineflayer.createBot({
-        host: config.server.host,
-        port: parseInt(config.server.port, 10),
-        username,
-        auth: 'offline',
-        version: String(config.server.version || '1.21.4'),
-        hideErrors: true,
-    });
-    const password = config.bot.password || '';
+    const MAX_DUP_RETRIES = 5; // 同名重复登录（duplicate_login）最多换 5 个序号
+    for (let attempt = 0; attempt < MAX_DUP_RETRIES; attempt++) {
+        const username = bot.username + index; // 序号命名：主名+序号
+        const child = mineflayer.createBot({
+            host: config.server.host,
+            port: parseInt(config.server.port, 10),
+            username,
+            auth: 'offline',
+            version: String(config.server.version || '1.21.4'),
+            hideErrors: true,
+        });
+        const password = config.bot.password || '';
 
-    // 服务器可能要求先输验证码（/captcha <code>）才能注册
-    let captchaSent = false;
-    let abandoned = false;
-    const handleCaptchaText = (text) => {
-        if (!text || captchaSent || abandoned) return;
-        const s = String(text);
-        // 只响应服务器下发的验证码请求（带“验证码/注册”等语境），
-        // 避免把自己发出的 /captcha 回显当成新请求导致死循环
-        if (!/captcha/i.test(s) || !/验证码|注册|请使用|请输入|require|register/i.test(s)) return;
-        const m = s.match(/\/captcha\s+([A-Za-z0-9]+)/i);
-        if (m) {
-            captchaSent = true;
-            try { child.chat('/captcha ' + m[1]); } catch (e) {}
-        }
-    };
-    child.on('message', (jsonMsg) => {
-        try {
-            const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
-            if (log) log('info', `[子bot ${child.username}] 收到: ${text}`);
-            handleCaptchaText(text);
-        } catch (e) {}
-    });
-    child.on('chat', (name, msg) => {
-        if (log) log('info', `[子bot ${child.username}] 聊天 ${name}: ${msg}`);
-        handleCaptchaText(msg);
-    });
-
-    let spawned = false;
-    let resolveReady;
-    const readyPromise = new Promise((res) => { resolveReady = res; });
-    child.on('spawn', () => {
-        if (abandoned) return;
-        spawned = true;
-
-        // 依次：等验证码 → 注册（等确认） → 登录（等确认） → 切 unicode 键盘 → 传送到主 bot 本体
-        const setup = async () => {
-            if (abandoned) return;
-            try {
-                if (password) {
-                    child.chat(`/register ${password} ${password}`);
-                    // 注册成功或已注册过则继续
-                    await waitChildMessage(child, /注册成功|注册完成|已注册|你已经登陆过了/, 2500);
-                    if (abandoned) return;
-                    child.chat(`/login ${password}`);
-                    // 登录成功则继续
-                    await waitChildMessage(child, /登录成功|已成功登录|已登录|欢迎回来/, 2500);
-                    if (abandoned) return;
-                }
-                child.chat('/piano keyboard unicode');
-                await sleep(600);
-                if (abandoned) return;
-                // 直接传送到主 bot 本体
-                child.chat('/tp ' + bot.username);
-            } catch (e) { /* 忽略 */ }
-            resolveReady();
-        };
-
-        const start = Date.now();
-        const waitTimer = setInterval(() => {
-            if (abandoned) { clearInterval(waitTimer); return; }
-            if (captchaSent || Date.now() - start > 6000) {
-                clearInterval(waitTimer);
-                // 发出验证码后稍等再注册，保证指令顺序
-                setTimeout(() => setup().catch(() => resolveReady()), captchaSent ? 800 : 0);
+        // 服务器可能要求先输验证码（/captcha <code>）才能注册
+        let captchaSent = false;
+        let abandoned = false;
+        let retryDup = false;
+        const handleCaptchaText = (text) => {
+            if (!text || captchaSent || abandoned) return;
+            const s = String(text);
+            // 只响应服务器下发的验证码请求（带“验证码/注册”等语境），
+            // 避免把自己发出的 /captcha 回显当成新请求导致死循环
+            if (!/captcha/i.test(s) || !/验证码|注册|请使用|请输入|require|register/i.test(s)) return;
+            const m = s.match(/\/captcha\s+([A-Za-z0-9]+)/i);
+            if (m) {
+                captchaSent = true;
+                try { child.chat('/captcha ' + m[1]); } catch (e) {}
             }
-        }, 200);
-    });
-    child.on('error', (err) => {
-        if (log) log('warn', `[子bot ${child.username}] 错误: ${err && err.message ? err.message : err}`);
-    });
-    child.on('kicked', (reason) => {
-        let text = '';
-        try { text = typeof reason === 'string' ? reason : JSON.stringify(reason); } catch (e) { text = String(reason); }
-        if (log) log('warn', `[子bot ${child.username}] 被踢: ${text}`);
-    });
+        };
+        child.on('message', (jsonMsg) => {
+            try {
+                const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
+                if (log) log('info', `[子bot ${child.username}] 收到: ${text}`);
+                handleCaptchaText(text);
+            } catch (e) {}
+        });
+        child.on('chat', (name, msg) => {
+            if (log) log('info', `[子bot ${child.username}] 聊天 ${name}: ${msg}`);
+            handleCaptchaText(msg);
+        });
 
-    // 等待出生（最多 CHILD_LOGIN_WAIT 毫秒；被取消则立即放弃），失败则放弃该小号
-    const deadline = Date.now() + CHILD_LOGIN_WAIT;
-    while (!spawned && Date.now() < deadline && !isCancelled()) await sleep(100);
-    if (!spawned || isCancelled()) {
-        // 防止“僵尸小号”晚到连接后继续注册/切键/传送，干扰服务端状态
-        abandoned = true;
-        try { child.removeAllListeners(); } catch (e) {}
-        try { child.end(); } catch (e) {}
-        try { child.quit(); } catch (e) {}
-        return null;
+        let spawned = false;
+        let resolveReady;
+        const readyPromise = new Promise((res) => { resolveReady = res; });
+        child.on('spawn', () => {
+            if (abandoned) return;
+            spawned = true;
+
+            // 依次：等验证码 → 注册（等确认） → 登录（等确认） → 切 unicode 键盘 → 传送到主 bot 本体
+            const setup = async () => {
+                if (abandoned) return;
+                try {
+                    if (password) {
+                        child.chat(`/register ${password} ${password}`);
+                        // 注册成功或已注册过则继续
+                        await waitChildMessage(child, /注册成功|注册完成|已注册|你已经登陆过了/, 2500);
+                        if (abandoned) return;
+                        child.chat(`/login ${password}`);
+                        // 登录成功则继续
+                        await waitChildMessage(child, /登录成功|已成功登录|已登录|欢迎回来/, 2500);
+                        if (abandoned) return;
+                    }
+                    child.chat('/piano keyboard unicode');
+                    await sleep(600);
+                    if (abandoned) return;
+                    // 直接传送到主 bot 本体
+                    child.chat('/tp ' + bot.username);
+                } catch (e) { /* 忽略 */ }
+                resolveReady();
+            };
+
+            const start = Date.now();
+            const waitTimer = setInterval(() => {
+                if (abandoned) { clearInterval(waitTimer); return; }
+                if (captchaSent || Date.now() - start > 6000) {
+                    clearInterval(waitTimer);
+                    // 发出验证码后稍等再注册，保证指令顺序
+                    setTimeout(() => setup().catch(() => resolveReady()), captchaSent ? 800 : 0);
+                }
+            }, 200);
+        });
+        child.on('error', (err) => {
+            if (log) log('warn', `[子bot ${child.username}] 错误: ${err && err.message ? err.message : err}`);
+        });
+        child.on('kicked', (reason) => {
+            let text = '';
+            try { text = typeof reason === 'string' ? reason : JSON.stringify(reason); } catch (e) { text = String(reason); }
+            if (log) log('warn', `[子bot ${child.username}] 被踢: ${text}`);
+            // 同名重复登录：换序号重试
+            if (text.includes('duplicate_login')) {
+                retryDup = true;
+                abandoned = true;
+                try { child.removeAllListeners(); } catch (e) {}
+            }
+        });
+
+        // 等待出生（最多 CHILD_LOGIN_WAIT 毫秒；被取消则立即放弃），失败则放弃该小号
+        const deadline = Date.now() + CHILD_LOGIN_WAIT;
+        while (!spawned && !retryDup && Date.now() < deadline && !isCancelled()) await sleep(100);
+        if (retryDup) {
+            if (log) log('warn', `[子bot ${username}] 重复登录，换序号 ${index + 1} 重试`);
+            try { child.end(); } catch (e) {}
+            try { child.quit(); } catch (e) {}
+            index++;
+            continue;
+        }
+        if (!spawned || isCancelled()) {
+            // 防止“僵尸小号”晚到连接后继续注册/切键/传送，干扰服务端状态
+            abandoned = true;
+            try { child.removeAllListeners(); } catch (e) {}
+            try { child.end(); } catch (e) {}
+            try { child.quit(); } catch (e) {}
+            return null;
+        }
+        // 等注册/登录/传送流程完成（最多 8 秒），确保小号就绪再开始播放
+        await Promise.race([readyPromise, sleep(8000)]);
+        if (isCancelled()) {
+            // 创建期间被停止：退掉刚登录的小号
+            abandoned = true;
+            try { child.removeAllListeners(); } catch (e) {}
+            try { child.quit(); } catch (e) {}
+            return null;
+        }
+        return child;
     }
-    // 等注册/登录/传送流程完成（最多 8 秒），确保小号就绪再开始播放
-    await Promise.race([readyPromise, sleep(8000)]);
-    if (isCancelled()) {
-        // 创建期间被停止：退掉刚登录的小号
-        abandoned = true;
-        try { child.removeAllListeners(); } catch (e) {}
-        try { child.quit(); } catch (e) {}
-        return null;
-    }
-    return child;
+    if (log) log('warn', `[子bot] 连续 ${MAX_DUP_RETRIES} 次重复登录，放弃该小号`);
+    return null;
 }
 
 // ===== 内联 note_alloc =====
@@ -286,7 +305,7 @@ function allocateBots(notes, safeLimit7s, maxBots, safeLimit1s = 280, windowSec 
     return { botCount: maxBots, assign: null, fits: false, maxLoad7: 0, maxLoad1: 0 };
 }
 // 最多同时使用的 bot 数（1 主 + 9 小号）
-const MAX_BOTS = 10;
+const MAX_BOTS = 9; // 1 主 + 最多 8 个小号
 const instrCharMap = {
   0: "一丁丂七丄丅丆万丈三上下丌不与丏丐丑丒专且丕世丗丘丙业丛东丝丞丟丠両丢丣两严並丧丨丩个丫丬中丮丯丰丱串丳临丵丶丷丸丹为主丼丽举丿乀乁乂乃乄久乆乇么义乊之乌乍乎乏乐乑乒乓乔乕乖乗".split(''),
   1: "亀亁亂亃亄亅了亇予争亊事二亍于亏亐云互亓五井亖亗亘亙亚些亜亝亞亟亠亡亢亣交亥亦产亨亩亪享京亭亮亯亰亱亲亳亴亵亶亷亸亹人亻亼亽亾亿什仁仂仃仄仅仆仇仈仉今介仌仍从仏仐仑仒仓仔仕他仗".split(''),
@@ -351,7 +370,15 @@ function delayedQuitChildren(bot, session) {
         reserved.add(c.username);
         setTimeout(() => {
             try { if (c._client && !c._client.ended) c.quit(); } catch (e) {}
-            reserved.delete(c.username);
+            // 真正断开后才释放名字，避免新小号同名重复登录（duplicate_login）
+            let released = false;
+            const release = () => { if (!released) { released = true; reserved.delete(c.username); } };
+            if (c._client && !c._client.ended) {
+                try { c.once('end', release); } catch (e) {}
+            } else {
+                release();
+            }
+            setTimeout(release, 3000); // 兜底：最多再保留 3 秒
         }, 3000);
     }
 }
@@ -359,8 +386,9 @@ function delayedQuitChildren(bot, session) {
 // 选一个未被“延迟回收中”占用的槽位名（RS_Bot1..N）
 function nextChildIndex(bot) {
     const reserved = bot.__childNamesReserved || new Set();
+    const used = new Set(((bot.__nbsSession && bot.__nbsSession.childBots) || []).map((e) => e && e.child && e.child.username).filter(Boolean));
     let k = 1;
-    while (reserved.has(bot.username + k)) k++;
+    while (reserved.has(bot.username + k) || used.has(bot.username + k)) k++;
     return k;
 }
 
