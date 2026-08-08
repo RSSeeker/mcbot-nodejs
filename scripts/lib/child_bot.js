@@ -13,24 +13,30 @@ function isAlive(target) {
     return target && target._client && !target._client.ended;
 }
 
-// 发包频率限制器：每个 bot 每秒最多发 maxPerSec 个 tab_complete 包，
-// 防止触发服务端发包频率限制（You are sending too many packets!）被踢
-const MAX_PACKETS_PER_SEC = 70;
+// 发包频率限制器：每个 bot 每 7 秒最多发 MAX_PACKETS_PER_WINDOW 个 tab_complete 包，
+// 与 Paper 的 packet-limiter（500 包/7s）同款滑动窗口语义。
+// 450 = 500 的 90%，给 GC 抖动 / TPS 波动 / ViaVersion 封装等留生产余量
+const MAX_PACKETS_PER_WINDOW = 450;
+const RATE_WINDOW_MS = 7000;
 // 发包限速开关（false 关闭）
 const RATE_LIMIT_ENABLED = true;
-function makeRateLimiter(maxPerSec = MAX_PACKETS_PER_SEC) {
+
+function makeRateLimiter(windowPackets = MAX_PACKETS_PER_WINDOW, windowMs = RATE_WINDOW_MS) {
     if (!RATE_LIMIT_ENABLED) {
         // 不限速：每次调用立即返回
         return async function waitSlot() {};
     }
-    let last = 0;
-    const interval = 1000 / maxPerSec;
+    const times = [];
     return async function waitSlot() {
         const now = performance.now();
-        // 固定最小间隔（无突发），严格限速
-        const wait = interval - (now - last);
-        if (wait > 0) await sleep(wait);
-        last = performance.now();
+        // 滚动窗口：7 秒内已满则等到最早的包滑出窗口
+        while (times.length && now - times[0] >= windowMs) times.shift();
+        if (times.length >= windowPackets) {
+            const wait = times[0] + windowMs - now;
+            if (wait > 0) await sleep(wait);
+            times.shift();
+        }
+        times.push(performance.now());
     };
 }
 
@@ -165,4 +171,4 @@ async function createChildBot(bot, index, config, isCancelled = () => false) {
     return child;
 }
 
-module.exports = { createChildBot, isAlive, waitChildMessage, sleep, makeRateLimiter, MAX_PACKETS_PER_SEC, CHILD_LOGIN_WAIT };
+module.exports = { createChildBot, isAlive, waitChildMessage, sleep, makeRateLimiter, MAX_PACKETS_PER_WINDOW, RATE_WINDOW_MS, CHILD_LOGIN_WAIT };

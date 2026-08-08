@@ -25,7 +25,8 @@ const parseArgs = require('./lib/parse_args');
 // 强制重载共享模块（server.js 只清理脚本自身的缓存，依赖模块需要手动清）
 const childBotPath = require.resolve('./lib/child_bot');
 delete require.cache[childBotPath];
-const { createChildBot, makeRateLimiter, MAX_PACKETS_PER_SEC } = require(childBotPath);
+const { createChildBot, makeRateLimiter, MAX_PACKETS_PER_WINDOW } = require(childBotPath);
+const { allocateBots } = require('./lib/note_alloc');
 // 最多同时使用的 bot 数（1 主 + 9 小号）
 const MAX_BOTS = 10;
 const instrCharMap = {
@@ -169,13 +170,26 @@ async function playNBS(bot, session, filePath, reply, log, config, singleBot = f
     // 预处理音符
     const rows = buildTabList(song);
     const totalNotes = rows.reduce((sum, row) => sum + row.length, 0);
-    const maxPerTick = Math.max(...rows.map((r) => r.length), 0);
 
-    // 需要几个 bot：仅按最密处的发包速率算（每 bot 最快 490 包/7s ≈ 70 包/秒），上限 MAX_BOTS
-    const ticksPerSec = 1000 / songSpeed;
-    const peakPerSec = maxPerTick * ticksPerSec;
-    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, Math.ceil(peakPerSec / MAX_PACKETS_PER_SEC)));
-    log('info', `音符总数 ${totalNotes}，最密处 ${peakPerSec.toFixed(0)} 音符/秒，每 bot 上限 ${MAX_PACKETS_PER_SEC} 包/秒，需要 ${botNum} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
+    // 多 bot：约束分配——把每个音符按时间轴贪心分给“7 秒窗口负载最低”的 bot，
+    // 保证每个 bot 任意 7 秒窗口 ≤ MAX_PACKETS_PER_WINDOW（450，500 留 10% 余量），上限 MAX_BOTS
+    const flatNotes = [];
+    for (let j = 0; j < rows.length; j++) {
+        const row = rows[j];
+        if (!row || row.length === 0) continue;
+        for (let k = 0; k < row.length; k++) flatNotes.push({ seconds: j * songSpeed / 1000 });
+    }
+    let alloc = null;
+    let botNum;
+    if (singleBot) {
+        botNum = 1;
+    } else {
+        alloc = allocateBots(flatNotes, MAX_PACKETS_PER_WINDOW, MAX_BOTS);
+        botNum = alloc.botCount;
+        if (alloc.fits) log('info', `约束分配：${botNum} 个 bot，每 bot 7 秒窗口最多 ${alloc.maxLoad} 包（上限 ${MAX_PACKETS_PER_WINDOW}）`);
+        else log('warn', `${MAX_BOTS} 个 bot 仍无法满足约束，限速器兜底`);
+    }
+    log('info', `音符总数 ${totalNotes}，需要 ${botNum} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
 
     // 串行创建小号（各自独立连接/注册），失败不影响主 bot 播放
     if (botNum > 1) {
@@ -207,9 +221,10 @@ async function playNBS(bot, session, filePath, reply, log, config, singleBot = f
     // 小号在前、主 bot 兜底（与 WeeaxeBot 一致）
     const botList = [...session.childBots.map((e) => e.child), bot];
 
-    // 逐 tick 播放：每 tick 从当前存活 bot 里均匀分发，掉线自动剔除
+    // 逐 tick 播放：按预分配结果发给指定 bot，掉线则退到存活 bot，限速器兜底
     let nextTick = performance.now();
     let transactionId = 1;
+    let flatIdx = 0;
     for (let j = 0; j < rows.length; j++) {
         if (token !== session.token) break; // 停止控制
         if (!isClientAlive(bot)) {
@@ -228,9 +243,18 @@ async function playNBS(bot, session, filePath, reply, log, config, singleBot = f
 
         const alive = botList.filter((b) => b && isClientAlive(b));
         if (alive.length === 0) break;
-        for (let i = 0; i < row.length; i++) {
+        let fallback = 0;
+        for (let i = 0; i < row.length; i++, flatIdx++) {
             if (token !== session.token) break;
-            const sender = alive[i % alive.length];
+            let sender;
+            if (alloc && alloc.assign && alloc.assign[flatIdx] !== undefined) {
+                const target = botList[alloc.assign[flatIdx]];
+                sender = (target && isClientAlive(target)) ? target : alive[fallback % alive.length];
+                if (sender !== target) fallback++;
+            } else {
+                sender = alive[fallback % alive.length];
+                fallback++;
+            }
             // 每个 bot 独立限速，防止“发包过多”被踢
             await limiterFor(sender)();
             try {

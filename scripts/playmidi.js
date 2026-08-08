@@ -37,7 +37,8 @@ const parseArgs = require('./lib/parse_args');
 // 强制重载共享模块（server.js 只清理脚本自身的缓存，依赖模块需要手动清）
 const childBotPath = require.resolve('./lib/child_bot');
 delete require.cache[childBotPath];
-const { createChildBot, makeRateLimiter, MAX_PACKETS_PER_SEC } = require(childBotPath);
+const { createChildBot, makeRateLimiter, MAX_PACKETS_PER_WINDOW } = require(childBotPath);
+const { allocateBots } = require('./lib/note_alloc');
 // 最多同时使用的 bot 数（1 主 + 9 小号）
 const MAX_BOTS = 10;
 
@@ -237,18 +238,19 @@ reply('用法: **run playmidi <歌曲.mid> | [1bot] | <速度> | <模式> | note
     const duration = timeline.length ? timeline[timeline.length - 1].seconds : 0;
     reply(`开始播放 ${path.basename(target)}（${timeline.length} 个音符，预计 ${duration.toFixed(1)}s${ignoreTempo ? '，已忽略变速' : ''}，**run playmidi stop 停止）`);
 
-    // 多 bot：按最密 100ms 窗口的多音度 + 最密处发包速率算，兼顾均值，上限 MAX_BOTS（1bot 参数强制单 bot）
-    const WINDOW = 0.1;
-    const bucketCounts = new Map();
-    for (const n of timeline) {
-        const b = Math.floor(n.seconds / WINDOW);
-        bucketCounts.set(b, (bucketCounts.get(b) || 0) + 1);
+    // 多 bot：约束分配——每个音符按时间轴贪心分给“7 秒窗口负载最低”的 bot，
+    // 保证每个 bot 任意 7 秒窗口 ≤ MAX_PACKETS_PER_WINDOW（450，500 留 10% 余量），上限 MAX_BOTS
+    let alloc = null;
+    let botNum;
+    if (singleBot) {
+        botNum = 1;
+    } else {
+        alloc = allocateBots(timeline, MAX_PACKETS_PER_WINDOW, MAX_BOTS);
+        botNum = alloc.botCount;
+        if (alloc.fits) log('info', `[playmidi] 约束分配：${botNum} 个 bot，每 bot 7 秒窗口最多 ${alloc.maxLoad} 包（上限 ${MAX_PACKETS_PER_WINDOW}）`);
+        else log('warn', `[playmidi] ${MAX_BOTS} 个 bot 仍无法满足约束，限速器兜底`);
     }
-    const maxWindow = bucketCounts.size ? Math.max(...bucketCounts.values()) : 0;
-    const peakPerSec = maxWindow / WINDOW;
-    const botNum = singleBot ? 1 : Math.min(MAX_BOTS, Math.max(1, Math.ceil(peakPerSec / MAX_PACKETS_PER_SEC)));
     if (singleBot) log('info', '[playmidi] 已强制单 bot 演奏');
-    else if (botNum > 1) log('info', `[playmidi] 最密处 ${peakPerSec.toFixed(0)} 音符/秒，每 bot 上限 ${MAX_PACKETS_PER_SEC} 包/秒，需要 ${botNum} 个 bot`);
 
     // 先退出旧小号，再串行创建新小号（失败不影响主 bot 播放）
     quitPlaymidiChildren(bot);
@@ -299,20 +301,28 @@ reply('用法: **run playmidi <歌曲.mid> | [1bot] | <速度> | <模式> | note
         if (now < targetSec * 1000) {
             await sleep(targetSec * 1000 - now);
         }
-        // 发送当前时间点的所有音符（多 bot 均匀分发，掉线自动剔除）
+        // 发送当前时间点的所有音符（按预分配结果发给指定 bot，掉线则退到存活 bot，限速器兜底）
         const senders = botList.filter((b) => b && isAlive(b));
         if (senders.length === 0) break;
-        let sendIdx = 0;
+        let fallback = 0;
         while (i < timeline.length && timeline[i].seconds <= targetSec + 0.002) {
+            const noteIdx = i;
             const n = timeline[i++];
             const resolved = midiCommon.resolveNote(n.channel, n.pitch, instMode, fixedInstrument, n.trackInst);
             const key = resolved.key;
             const inst = resolved.instrument;
             const ch = midiCommon.charForNote(inst, key);
             if (ch) {
-                const sender = senders[sendIdx % senders.length];
-                sendIdx++;
-                // 每个 bot 独立限速，防止“发包过多”被踢
+                let sender;
+                if (alloc && alloc.assign && alloc.assign[noteIdx] !== undefined) {
+                    const target = botList[alloc.assign[noteIdx]];
+                    sender = (target && isAlive(target)) ? target : senders[fallback % senders.length];
+                    if (sender !== target) fallback++;
+                } else {
+                    sender = senders[fallback % senders.length];
+                    fallback++;
+                }
+                // 每个 bot 独立限速（7 秒窗口 450 包），兜底防止“发包过多”被踢
                 await limiterFor(sender)();
                 try {
                     sender._client.write('tab_complete', { transactionId: transId++, text: '/// ' + ch });
