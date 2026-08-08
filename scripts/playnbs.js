@@ -21,12 +21,234 @@
 const fs = require('fs');
 const path = require('path');
 const { fromArrayBuffer } = require('@nbsjs/core');
-const parseArgs = require('./lib/parse_args');
-// 强制重载共享模块（server.js 只清理脚本自身的缓存，依赖模块需要手动清）
-const childBotPath = require.resolve('./lib/child_bot');
-delete require.cache[childBotPath];
-const { createChildBot, makeRateLimiter, MAX_PACKETS_PER_WINDOW } = require(childBotPath);
-const { allocateBots } = require('./lib/note_alloc');
+// ===== 内联 parse_args =====
+// 统一参数解析：所有脚本的参数之间用 | 分隔（参数内部可含空格）
+// 例: **run playmidi My Song | 2 | pitch
+// server.js 先把整条命令按空白切分传入 args，这里拼回原始文本再按 | 拆分，
+// 空段保留（用于省略中间参数，如 "song | | pitch" 表示速度用默认值）
+function parseArgs(args) {
+    const joined = (args || []).join(' ').trim();
+    if (!joined) return [];
+    return joined.split('|').map((s) => s.trim());
+}
+
+// ===== 内联 child_bot（复用本文件的 sleep/isClientAlive）=====
+// 子 bot 创建：playnbs / playmidi 共用的多 bot 逻辑
+// 同一服务器、offline 模式，先过验证码再注册，然后登录、切 unicode 键盘、传送到主 bot 本体
+
+const CHILD_LOGIN_WAIT = 5000; // 等待出生（spawn）的最长时间
+
+
+
+// 发包频率限制器：每个 bot 每 7 秒最多发 MAX_PACKETS_PER_WINDOW 个 tab_complete 包，
+// 与 Paper 的 packet-limiter（500 包/7s）同款滑动窗口语义。
+// 450 = 500 的 90%，给 GC 抖动 / TPS 波动 / ViaVersion 封装等留生产余量
+const MAX_PACKETS_PER_WINDOW = 450;
+const RATE_WINDOW_MS = 7000;
+// 发包限速开关（false 关闭）
+const RATE_LIMIT_ENABLED = true;
+
+function makeRateLimiter(windowPackets = MAX_PACKETS_PER_WINDOW, windowMs = RATE_WINDOW_MS) {
+    if (!RATE_LIMIT_ENABLED) {
+        // 不限速：每次调用立即返回
+        return async function waitSlot() {};
+    }
+    const times = [];
+    return async function waitSlot() {
+        const now = performance.now();
+        // 滚动窗口：7 秒内已满则等到最早的包滑出窗口
+        while (times.length && now - times[0] >= windowMs) times.shift();
+        if (times.length >= windowPackets) {
+            const wait = times[0] + windowMs - now;
+            if (wait > 0) await sleep(wait);
+            times.shift();
+        }
+        times.push(performance.now());
+    };
+}
+
+// 等小号收到匹配的消息（用于确认注册/登录完成），带超时兜底
+function waitChildMessage(child, pattern, timeoutMs) {
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            child.removeListener('message', onMsg);
+            child.removeListener('chat', onChat);
+            resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        const onMsg = (jsonMsg) => {
+            try {
+                const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
+                if (pattern.test(text)) finish();
+            } catch (e) {}
+        };
+        const onChat = (name, msg) => {
+            if (pattern.test(String(msg || ''))) finish();
+        };
+        child.on('message', onMsg);
+        child.on('chat', onChat);
+    });
+}
+
+// 创建子 bot：主名+序号（如 RS_Bot1、RS_Bot2），出生后注册/登录/切键/传送到主 bot
+// 返回 child；5 秒内没 spawn 则判定登录失败返回 null
+async function createChildBot(bot, index, config, isCancelled = () => false) {
+    const mineflayer = require('mineflayer');
+    const username = bot.username + index; // 序号命名：主名+序号
+    const child = mineflayer.createBot({
+        host: config.server.host,
+        port: parseInt(config.server.port, 10),
+        username,
+        auth: 'offline',
+        version: String(config.server.version || '1.21.4'),
+        hideErrors: true,
+    });
+    const password = config.bot.password || '';
+
+    // 服务器可能要求先输验证码（/captcha <code>）才能注册
+    let captchaSent = false;
+    let abandoned = false;
+    const handleCaptchaText = (text) => {
+        if (!text || captchaSent || abandoned) return;
+        const s = String(text);
+        // 只响应服务器下发的验证码请求（带“验证码/注册”等语境），
+        // 避免把自己发出的 /captcha 回显当成新请求导致死循环
+        if (!/captcha/i.test(s) || !/验证码|注册|请使用|请输入|require|register/i.test(s)) return;
+        const m = s.match(/\/captcha\s+([A-Za-z0-9]+)/i);
+        if (m) {
+            captchaSent = true;
+            try { child.chat('/captcha ' + m[1]); } catch (e) {}
+        }
+    };
+    child.on('message', (jsonMsg) => {
+        try {
+            const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
+            handleCaptchaText(text);
+        } catch (e) {}
+    });
+    child.on('chat', (name, msg) => handleCaptchaText(msg));
+
+    let spawned = false;
+    let resolveReady;
+    const readyPromise = new Promise((res) => { resolveReady = res; });
+    child.on('spawn', () => {
+        if (abandoned) return;
+        spawned = true;
+
+        // 依次：等验证码 → 注册（等确认） → 登录（等确认） → 切 unicode 键盘 → 传送到主 bot 本体
+        const setup = async () => {
+            if (abandoned) return;
+            try {
+                if (password) {
+                    child.chat(`/register ${password} ${password}`);
+                    // 注册成功或已注册过则继续
+                    await waitChildMessage(child, /注册成功|注册完成|已注册|你已经登陆过了/, 2500);
+                    if (abandoned) return;
+                    child.chat(`/login ${password}`);
+                    // 登录成功则继续
+                    await waitChildMessage(child, /登录成功|已成功登录|已登录|欢迎回来/, 2500);
+                    if (abandoned) return;
+                }
+                child.chat('/piano keyboard unicode');
+                await sleep(600);
+                if (abandoned) return;
+                // 直接传送到主 bot 本体
+                child.chat('/tp ' + bot.username);
+            } catch (e) { /* 忽略 */ }
+            resolveReady();
+        };
+
+        const start = Date.now();
+        const waitTimer = setInterval(() => {
+            if (abandoned) { clearInterval(waitTimer); return; }
+            if (captchaSent || Date.now() - start > 6000) {
+                clearInterval(waitTimer);
+                // 发出验证码后稍等再注册，保证指令顺序
+                setTimeout(() => setup().catch(() => resolveReady()), captchaSent ? 800 : 0);
+            }
+        }, 200);
+    });
+    child.on('error', () => {});
+    child.on('kicked', () => {});
+
+    // 等待出生（最多 CHILD_LOGIN_WAIT 毫秒；被取消则立即放弃），失败则放弃该小号
+    const deadline = Date.now() + CHILD_LOGIN_WAIT;
+    while (!spawned && Date.now() < deadline && !isCancelled()) await sleep(100);
+    if (!spawned || isCancelled()) {
+        // 防止“僵尸小号”晚到连接后继续注册/切键/传送，干扰服务端状态
+        abandoned = true;
+        try { child.removeAllListeners(); } catch (e) {}
+        try { child.end(); } catch (e) {}
+        try { child.quit(); } catch (e) {}
+        return null;
+    }
+    // 等注册/登录/传送流程完成（最多 8 秒），确保小号就绪再开始播放
+    await Promise.race([readyPromise, sleep(8000)]);
+    if (isCancelled()) {
+        // 创建期间被停止：退掉刚登录的小号
+        abandoned = true;
+        try { child.removeAllListeners(); } catch (e) {}
+        try { child.quit(); } catch (e) {}
+        return null;
+    }
+    return child;
+}
+
+// ===== 内联 note_alloc =====
+// 音符的“约束分配”：保证每个 bot 在任意 7 秒窗口内的包数 ≤ safeLimit。
+//
+// 原理：按时间轴顺序处理每个音符，把它分给“最近 7 秒窗口负载最低”的 bot（贪心平衡）；
+// 若某个 bot 的窗口已满（bestLoad >= safeLimit），说明当前 bot 数不够，
+// 增加一个 bot 从头重新分配，直到全部满足或达到 maxBots。
+// 这样不是“轮询”，而是真正的逐 bot 7 秒窗口约束。
+//
+// notes: [{ seconds }]，按时间升序
+// 返回 { botCount, assign, fits, maxLoad }
+//   assign[i] = 第 i 个音符分配的 bot 下标；fits=false 表示 maxBots 内无法满足
+
+function allocateBots(notes, safeLimit, maxBots, windowSec = 7) {
+    const n = notes.length;
+    if (n === 0) return { botCount: 1, assign: [], fits: true, maxLoad: 0 };
+    for (let botCount = 1; botCount <= maxBots; botCount++) {
+        // 每个 bot 维护一个时间数组 + head 指针（数组有序，滑动窗口 O(1) 均摊）
+        const queues = Array.from({ length: botCount }, () => ({ arr: [], head: 0 }));
+        const assign = new Array(n);
+        let fits = true;
+        for (let i = 0; i < n; i++) {
+            const t = notes[i].seconds;
+            let best = 0, bestLoad = Infinity;
+            for (let b = 0; b < botCount; b++) {
+                const q = queues[b];
+                while (q.head < q.arr.length && q.arr[q.head] < t - windowSec) q.head++;
+                const load = q.arr.length - q.head;
+                if (load < bestLoad) { bestLoad = load; best = b; }
+            }
+            if (bestLoad >= safeLimit) { fits = false; break; }
+            queues[best].arr.push(t);
+            assign[i] = best;
+        }
+        if (fits) {
+            // 独立验证：统计每个 bot 的实际 7s 窗口峰值
+            let maxLoad = 0;
+            const perBot = Array.from({ length: botCount }, () => []);
+            for (let i = 0; i < n; i++) perBot[assign[i]].push(notes[i].seconds);
+            for (const times of perBot) {
+                let left = 0;
+                for (let right = 0; right < times.length; right++) {
+                    while (times[right] - times[left] > windowSec) left++;
+                    maxLoad = Math.max(maxLoad, right - left + 1);
+                }
+            }
+            return { botCount, assign, fits: true, maxLoad };
+        }
+    }
+    // 达到 maxBots 仍不满足：返回贪心结果（由限速器兜底，最多只是拖慢）
+    return { botCount: maxBots, assign: null, fits: false, maxLoad: 0 };
+}
 // 最多同时使用的 bot 数（1 主 + 9 小号）
 const MAX_BOTS = 10;
 const instrCharMap = {

@@ -83,7 +83,12 @@ async function findBlockItem(bot, name) {
 module.exports = async function (bot, context) {
     const { reply, args, log } = context;
     if (!bot.__scriptFlags) bot.__scriptFlags = {};
-    const parseArgs = require('./lib/parse_args');
+    // 内联 parse_args：参数用 | 分隔（参数内部可含空格）
+    function parseArgs(args) {
+        const joined = (args || []).join(' ').trim();
+        if (!joined) return [];
+        return joined.split('|').map((s) => s.trim());
+    }
     // 参数用 | 分隔：<fill|tower|road> | <参数...> | <方块>
     const [subArg = '', ...rest] = parseArgs(args);
 
