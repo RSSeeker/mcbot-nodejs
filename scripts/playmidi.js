@@ -294,21 +294,28 @@ const CHILD_LOGIN_WAIT = 5000; // 等待出生（spawn）的最长时间
 // 450 = 500 的 90%，给 GC 抖动 / TPS 波动 / ViaVersion 封装等留生产余量
 const MAX_PACKETS_PER_WINDOW = 450; // 7 秒上限
 const RATE_WINDOW_MS = 7000;
-const MAX_PACKETS_PER_1S = 280;     // 1 秒上限
+const RATE_BURST_PACKETS = 160; // 1 秒突发上限（allocateBots 规划用）
+const MAIN_1S_LIMIT = 180;      // 主 bot 1 秒限速
+const CHILD_1S_LIMIT = 140;     // 子 bot 1 秒限速（ViaVersion 封装放大，按实际×1.5 倒推，更保守）
 const RATE_1S_MS = 1000;
+const SONG_SWITCH_SILENCE_MS = 1500; // 切歌/小号登录后主 bot 静默时长（消化上一首尾音 + 登录爆发）
 // 发包限速开关（false 关闭）
 const RATE_LIMIT_ENABLED = true;
 
-// 协同限速：每 bot 7 秒 ≤ MAX_PACKETS_PER_WINDOW 且 1 秒 ≤ MAX_PACKETS_PER_1S
-function makeRateLimiter() {
+// 协同限速：每 bot 7 秒 ≤450、1 秒滑动窗口 ≤ secLimit，外加“自然秒硬限”（跨秒才重置，贴近 Paper 统计）
+function makeRateLimiter(secLimit = RATE_BURST_PACKETS) {
     if (!RATE_LIMIT_ENABLED) {
         // 不限速：每次调用立即返回
         return async function waitSlot() {};
     }
     const times = [];
+    let secKey = 0;
+    let secCount = 0;
     return async function waitSlot() {
         for (;;) {
             const now = performance.now();
+            const nowSec = Math.floor(Date.now() / 1000);
+            if (nowSec !== secKey) { secKey = nowSec; secCount = 0; } // 跨秒重置自然秒计数
             while (times.length && now - times[0] >= RATE_WINDOW_MS) times.shift();
             let idx1 = 0;
             while (idx1 < times.length && now - times[idx1] >= RATE_1S_MS) idx1++;
@@ -316,11 +323,14 @@ function makeRateLimiter() {
             const c1 = times.length - idx1;
             let wait = 0;
             if (c7 >= MAX_PACKETS_PER_WINDOW) wait = Math.max(wait, times[0] + RATE_WINDOW_MS - now);
-            if (c1 >= MAX_PACKETS_PER_1S) wait = Math.max(wait, times[idx1] + RATE_1S_MS - now);
+            if (c1 >= secLimit) wait = Math.max(wait, times[idx1] + RATE_1S_MS - now);
+            if (secCount >= secLimit) wait = Math.max(wait, (nowSec + 1) * 1000 - Date.now()); // 自然秒已满，等下一秒
             if (wait <= 0) break;
             await sleep(wait);
         }
         times.push(performance.now());
+        if (Math.floor(Date.now() / 1000) === secKey) secCount++;
+        else { secKey = Math.floor(Date.now() / 1000); secCount = 1; }
     };
 }
 
@@ -496,7 +506,7 @@ async function createChildBot(bot, index, config, isCancelled = () => false, log
 // 返回 { botCount, assign, fits, maxLoad }
 //   assign[i] = 第 i 个音符分配的 bot 下标；fits=false 表示 maxBots 内无法满足
 
-function allocateBots(notes, safeLimit7s, maxBots, safeLimit1s = 280, windowSec = 7, window1s = 1) {
+function allocateBots(notes, safeLimit7s, maxBots, safeLimit1s = RATE_BURST_PACKETS, windowSec = 7, window1s = 1) {
     const n = notes.length;
     if (n === 0) return { botCount: 1, assign: [], fits: true, maxLoad7: 0, maxLoad1: 0 };
     for (let botCount = 1; botCount <= maxBots; botCount++) {
@@ -596,7 +606,8 @@ const botLimiters = new Map();
 function limiterFor(bot) {
     let lim = botLimiters.get(bot);
     if (!lim) {
-        lim = makeRateLimiter();
+        // 主 bot 用 240，子 bot 用 200（更保守，ViaVersion 放大）
+        lim = makeRateLimiter(bot.__isPianoMain ? MAIN_1S_LIMIT : CHILD_1S_LIMIT);
         botLimiters.set(bot, lim);
     }
     return lim;
@@ -765,6 +776,7 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         return;
     }
     bot.__playmidiPlaying = true;
+    bot.__isPianoMain = true; // 主 bot 标记（限速器给主 bot 更高的 1s 上限）
 
     // 歌曲列表（按文件名首字母排序，全路径）；快照化，播放期间不受外部文件变化影响
     const allSongs = fs.existsSync(MIDI_DIR)
@@ -810,10 +822,10 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         if (singleBot) {
             botCount = 1;
         } else {
-            const alloc = allocateBots(timeline, MAX_PACKETS_PER_WINDOW, MAX_BOTS, MAX_PACKETS_PER_1S);
+            const alloc = allocateBots(timeline, MAX_PACKETS_PER_WINDOW, MAX_BOTS, RATE_BURST_PACKETS);
             botCount = alloc.botCount;
             assign = alloc.assign;
-            if (alloc.fits) log('info', `[playmidi] 约束分配：${botCount} 个 bot，每 bot 7s 窗口最多 ${alloc.maxLoad7} 包（≤${MAX_PACKETS_PER_WINDOW}）、1s 窗口最多 ${alloc.maxLoad1} 包（≤${MAX_PACKETS_PER_1S}）`);
+            if (alloc.fits) log('info', `[playmidi] 约束分配：${botCount} 个 bot，每 bot 7s 窗口最多 ${alloc.maxLoad7} 包（≤${MAX_PACKETS_PER_WINDOW}）、1s 窗口最多 ${alloc.maxLoad1} 包（≤${RATE_BURST_PACKETS}）`);
             else log('warn', `[playmidi] ${MAX_BOTS} 个 bot 仍无法满足约束，限速器兜底`);
         }
         return { timeline, tempoChanges, duration, botCount, assign };
@@ -823,6 +835,11 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
     async function adjustBots(wantedBotCount) {
         const cur = bot.__playmidiChildren;
         const wanted = Math.max(0, wantedBotCount - 1);
+        // 播放中掉线的小号：本首歌内不补，等下一首这里先清出数组再统一补号
+        for (let i = cur.length - 1; i >= 0; i--) {
+            const c = cur[i];
+            if (!c || !c._client || c._client.ended) cur.splice(i, 1);
+        }
         // 增加：串行创建（复用槽位名 RS_Bot1..N）
         while (cur.length < wanted) {
             if (isStopped()) break;
@@ -946,6 +963,8 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
     await adjustBots(prep.botCount);
 
     while (prep && !isStopped()) {
+        // 切歌/小号登录后主 bot 静默片刻，避免“登录风暴 + 演奏发包”叠加
+        await sleep(SONG_SWITCH_SILENCE_MS);
         reply(`开始播放 ${path.basename(playlist[curIdx])}（${prep.timeline.length} 个音符，预计 ${prep.duration.toFixed(1)}s${ignoreTempo ? '，已忽略变速' : ''}，**run playmidi stop 停止）`);
         const ok = await playSong(prep);
         playedSongs++;
