@@ -11,9 +11,14 @@
  *   4. 按谱面曲速逐 tick 播放，平均音符多时自动多开小号分担（多音响度）
  *
  * 用法（游戏内聊天，经 **run 调用）：
- *   **run playnbs <歌曲名.nbs> | [1bot]   播放 songs/ 目录下的歌曲（1bot 强制单 bot 演奏）
- *   **run playnbs stop                    停止当前播放并下线小号
- *   **run playnbs list | [关键词]         列出 / 搜索歌曲
+ *   **run playnbs <歌曲名.nbs> | [参数...]   播放 songs/ 目录下的歌曲（参数无序）
+ *   **run playnbs stop                       停止当前播放并下线小号
+ *   **run playnbs list | [关键词]            列出 / 搜索歌曲
+ *
+ * 参数（无序，写哪个激活哪个）:
+ *   1bot / single / solo: 强制单 bot 演奏
+ *   once（默认）: 单曲播放一次 | loop: 单曲循环
+ *   list: 列表播放一次（从当前歌按字母序往下播）| listloop: 列表循环 | random: 随机播放
  *
  * 歌曲文件放到项目根目录的 songs/ 文件夹下。
  */
@@ -304,19 +309,6 @@ function stopPlayback(bot, reply) {
     return old.map((e) => e && e.child).filter(Boolean);
 }
 
-// 只清理属于本次播放（token）的小号，不递增 token，避免旧实例收尾时误杀新开始的播放
-function cleanupPlayback(bot, token) {
-    const session = bot.__nbsSession;
-    if (!session) return;
-    session.childBots = session.childBots.filter((entry) => {
-        if (!entry || entry.token !== token) return true;
-        try {
-            if (entry.child && entry.child._client && !entry.child._client.ended) entry.child.quit();
-        } catch (e) {}
-        return false;
-    });
-}
-
 function isClientAlive(target) {
     return target && target._client && !target._client.ended;
 }
@@ -353,7 +345,8 @@ function buildTabList(song) {
     return rows;
 }
 
-async function playNBS(bot, session, filePath, reply, log, config, singleBot = false) {
+async function playNBS(bot, session, filePath, reply, log, config, options = {}) {
+    const { singleBot = false, playMode = 'once' } = options;
     // 先停掉上一次播放
     const oldChildren = stopPlayback(bot, null);
     const token = ++session.token;
@@ -374,52 +367,75 @@ async function playNBS(bot, session, filePath, reply, log, config, singleBot = f
         }
     }
 
-    // 读取并解析 NBS
-    let song;
-    try {
-        const songFile = fs.readFileSync(filePath);
-        song = fromArrayBuffer(new Uint8Array(songFile).buffer);
-    } catch (err) {
-        reply('读取/解析 NBS 文件失败: ' + err.message);
-        return;
+    // 歌曲列表（按文件名字母排序，全路径，含子目录）
+    const allSongs = [];
+    const walk = (dir) => {
+        if (!fs.existsSync(dir)) return;
+        for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, ent.name);
+            if (ent.isDirectory()) walk(full);
+            else if (ent.isFile() && ent.name.toLowerCase().endsWith('.nbs')) allSongs.push(full);
+        }
+    };
+    walk(SONG_DIR);
+    allSongs.sort((a, b) => path.basename(a).toLowerCase().localeCompare(path.basename(b).toLowerCase()));
+    let curIdx = allSongs.findIndex(s => path.basename(s).toLowerCase() === path.basename(filePath).toLowerCase());
+    if (curIdx < 0) { allSongs.push(filePath); allSongs.sort((a, b) => path.basename(a).toLowerCase().localeCompare(path.basename(b).toLowerCase())); curIdx = allSongs.indexOf(filePath); }
+
+    const isStopped = () => token !== session.token;
+
+    // 准备一首歌：解析 NBS + 预处理 + 约束分配
+    async function prepareSong(file) {
+        let song;
+        try {
+            song = fromArrayBuffer(new Uint8Array(fs.readFileSync(file)).buffer);
+        } catch (err) {
+            throw new Error(`读取/解析 NBS 失败 ${path.basename(file)}: ${err.message}`);
+        }
+        const songLength = song.getLength();
+        const songSpeed = song.getTimePerTick();
+        const songName = song.name || path.basename(file);
+        const rows = buildTabList(song);
+        const totalNotes = rows.reduce((sum, row) => sum + row.length, 0);
+        const flatNotes = [];
+        for (let j = 0; j < rows.length; j++) {
+            const row = rows[j];
+            if (!row || row.length === 0) continue;
+            for (let k = 0; k < row.length; k++) flatNotes.push({ seconds: j * songSpeed / 1000 });
+        }
+        let assign = null, botCount;
+        if (singleBot) {
+            botCount = 1;
+        } else {
+            const alloc = allocateBots(flatNotes, MAX_PACKETS_PER_WINDOW, MAX_BOTS);
+            botCount = alloc.botCount;
+            assign = alloc.assign;
+            if (alloc.fits) log('info', `约束分配：${botCount} 个 bot，每 bot 7 秒窗口最多 ${alloc.maxLoad} 包（上限 ${MAX_PACKETS_PER_WINDOW}）`);
+            else log('warn', `${MAX_BOTS} 个 bot 仍无法满足约束，限速器兜底`);
+        }
+        log('info', `正在播放: ${songName}，曲长 ${songLength} tick，速度 ${songSpeed}ms/tick，预计 ${(songLength * songSpeed / 1000).toFixed(1)}s | 音符 ${totalNotes}，需要 ${botCount} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
+        return { rows, songSpeed, songName, botCount, assign };
     }
 
-    const songLength = song.getLength();
-    const songSpeed = song.getTimePerTick();
-    const songName = song.name || path.basename(filePath);
-    log('info', `正在播放: ${songName}，曲长 ${songLength} tick，速度 ${songSpeed}ms/tick，预计 ${(songLength * songSpeed / 1000).toFixed(1)}s`);
-
-    // 预处理音符
-    const rows = buildTabList(song);
-    const totalNotes = rows.reduce((sum, row) => sum + row.length, 0);
-
-    // 多 bot：约束分配——把每个音符按时间轴贪心分给“7 秒窗口负载最低”的 bot，
-    // 保证每个 bot 任意 7 秒窗口 ≤ MAX_PACKETS_PER_WINDOW（450，500 留 10% 余量），上限 MAX_BOTS
-    const flatNotes = [];
-    for (let j = 0; j < rows.length; j++) {
-        const row = rows[j];
-        if (!row || row.length === 0) continue;
-        for (let k = 0; k < row.length; k++) flatNotes.push({ seconds: j * songSpeed / 1000 });
-    }
-    let alloc = null;
-    let botNum;
-    if (singleBot) {
-        botNum = 1;
-    } else {
-        alloc = allocateBots(flatNotes, MAX_PACKETS_PER_WINDOW, MAX_BOTS);
-        botNum = alloc.botCount;
-        if (alloc.fits) log('info', `约束分配：${botNum} 个 bot，每 bot 7 秒窗口最多 ${alloc.maxLoad} 包（上限 ${MAX_PACKETS_PER_WINDOW}）`);
-        else log('warn', `${MAX_BOTS} 个 bot 仍无法满足约束，限速器兜底`);
-    }
-    log('info', `音符总数 ${totalNotes}，需要 ${botNum} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
-
-    // 串行创建小号（各自独立连接/注册），失败不影响主 bot 播放
-    if (botNum > 1) {
-        for (let k = 1; k < botNum; k++) {
-            if (token !== session.token) break; // **stop 后不再创建新小号
-            const child = await createChildBot(bot, k, config, () => token !== session.token).catch(() => null);
-            if (token !== session.token) {
-                // 创建期间被 stop：退掉刚创建的小号
+    // 动态调整小号数量到 wantedBotCount（1 主 + wanted-1 小号）
+    async function adjustBots(wantedBotCount) {
+        const wanted = Math.max(0, wantedBotCount - 1);
+        while (session.childBots.length > wanted) {
+            const entry = session.childBots.pop();
+            const c = entry && entry.child;
+            if (c && c._client && !c._client.ended) {
+                try { c.quit(); } catch (e) {}
+                await Promise.race([
+                    new Promise((r) => { try { c.once('end', r); } catch (e) { r(); } }),
+                    sleep(1500),
+                ]);
+            }
+        }
+        while (session.childBots.length < wanted) {
+            if (isStopped()) break;
+            const k = session.childBots.length + 1;
+            const child = await createChildBot(bot, k, config, isStopped).catch(() => null);
+            if (isStopped()) {
                 if (child) { try { child.quit(); } catch (e) {} }
                 break;
             }
@@ -431,70 +447,95 @@ async function playNBS(bot, session, filePath, reply, log, config, singleBot = f
             }
         }
     }
-    if (token !== session.token) {
-        cleanupPlayback(bot, token); // 等待小号期间被 stop 了，只清自己的小号
-        return;
+
+    // 播放一首歌，返回 true=正常播完，false=被停/断开
+    async function playSong(prep) {
+        const { rows, songSpeed, assign } = prep;
+        const botList = [...session.childBots.map((e) => e.child), bot];
+        try { bot.chat('/piano keyboard unicode'); } catch (e) {}
+        let nextTick = performance.now();
+        let transactionId = 1;
+        let flatIdx = 0;
+        for (let j = 0; j < rows.length; j++) {
+            if (isStopped()) break;
+            if (!isClientAlive(bot)) {
+                log('warn', '主 bot 已断开，停止播放');
+                return false;
+            }
+            const now = performance.now();
+            const waitMs = Math.ceil(nextTick - now);
+            if (waitMs > 0) await sleep(waitMs);
+            nextTick += songSpeed;
+            const row = rows[j];
+            if (!row || row.length === 0) continue;
+            const alive = botList.filter((b) => b && isClientAlive(b));
+            if (alive.length === 0) return false;
+            let fallback = 0;
+            for (let i = 0; i < row.length; i++, flatIdx++) {
+                if (isStopped()) break;
+                let sender;
+                if (assign && assign[flatIdx] !== undefined) {
+                    const target = botList[assign[flatIdx]];
+                    sender = (target && isClientAlive(target)) ? target : alive[fallback % alive.length];
+                    if (sender !== target) fallback++;
+                } else {
+                    sender = alive[fallback % alive.length];
+                    fallback++;
+                }
+                await limiterFor(sender)();
+                try {
+                    sender._client.write('tab_complete', { transactionId: transactionId++, text: row[i] });
+                } catch (err) {
+                    log('warn', `发送音符失败: ${err.message}`);
+                }
+            }
+        }
+        return !isStopped();
     }
 
-    // 旧会话已完全停稳（旧小号断开、循环退出）后再切 unicode 键盘，
-    // 避免切键与旧会话的收尾/发包竞争导致服务端钢琴插件异常踢人
-    try { bot.chat('/piano keyboard unicode'); } catch (e) {}
+    // 决定下一首
+    function pickNext(idx) {
+        if (playMode === 'once') return null;
+        if (playMode === 'loop') return idx;
+        if (playMode === 'list') return (idx + 1 < allSongs.length) ? idx + 1 : null;
+        if (playMode === 'listloop') return (idx + 1) % allSongs.length;
+        if (playMode === 'random') {
+            if (allSongs.length <= 1) return idx;
+            let ni;
+            do { ni = Math.floor(Math.random() * allSongs.length); } while (ni === idx);
+            return ni;
+        }
+        return null;
+    }
 
-    // 小号在前、主 bot 兜底（与 WeeaxeBot 一致）
-    const botList = [...session.childBots.map((e) => e.child), bot];
+    const MODE_NAMES = { once: '单曲播放一次', loop: '单曲循环', list: '列表播放一次', listloop: '列表循环', random: '随机播放' };
+    reply(`播放模式: ${MODE_NAMES[playMode]}${playMode !== 'once' ? `，从 ${path.basename(filePath)} 开始` : ''}`);
 
-    // 逐 tick 播放：按预分配结果发给指定 bot，掉线则退到存活 bot，限速器兜底
-    let nextTick = performance.now();
-    let transactionId = 1;
-    let flatIdx = 0;
-    for (let j = 0; j < rows.length; j++) {
-        if (token !== session.token) break; // 停止控制
-        if (!isClientAlive(bot)) {
-            log('warn', '主 bot 已断开，停止播放');
+    // 主循环：每首播完提前算下一首的 bot 量，动态增减小号
+    let playedSongs = 0;
+    let prep = await prepareSong(filePath).catch((err) => { reply(err.message); return null; });
+    if (!prep) { stopPlayback(bot, null); session.playing = false; return; }
+    await adjustBots(prep.botCount);
+
+    while (prep && !isStopped()) {
+        reply(`开始播放: ${path.relative(SONG_DIR, allSongs[curIdx])}`);
+        const ok = await playSong(prep);
+        playedSongs++;
+        if (!ok) break;
+        const ni = pickNext(curIdx);
+        if (ni === null) {
+            if (playMode === 'list') reply('列表播放完毕');
             break;
         }
-
-        const now = performance.now();
-        // now 已包含上一 tick 的发包耗时，直接等下一个节拍即可，无需额外补偿
-        const waitMs = Math.ceil(nextTick - now);
-        if (waitMs > 0) await sleep(waitMs);
-        nextTick += songSpeed;
-
-        const row = rows[j];
-        if (!row || row.length === 0) continue;
-
-        const alive = botList.filter((b) => b && isClientAlive(b));
-        if (alive.length === 0) break;
-        let fallback = 0;
-        for (let i = 0; i < row.length; i++, flatIdx++) {
-            if (token !== session.token) break;
-            let sender;
-            if (alloc && alloc.assign && alloc.assign[flatIdx] !== undefined) {
-                const target = botList[alloc.assign[flatIdx]];
-                sender = (target && isClientAlive(target)) ? target : alive[fallback % alive.length];
-                if (sender !== target) fallback++;
-            } else {
-                sender = alive[fallback % alive.length];
-                fallback++;
-            }
-            // 每个 bot 独立限速，防止“发包过多”被踢
-            await limiterFor(sender)();
-            try {
-                sender._client.write('tab_complete', {
-                    transactionId: transactionId++,
-                    text: row[i],
-                });
-            } catch (err) {
-                log('warn', `发送音符失败: ${err.message}`);
-            }
-        }
+        curIdx = ni;
+        prep = await prepareSong(allSongs[curIdx]).catch((err) => { reply(err.message); return null; });
+        if (!prep) break;
+        await adjustBots(prep.botCount);
     }
 
-    // 收尾：下掉小号、复位状态
-    const finished = token === session.token;
-    cleanupPlayback(bot, token);
+    stopPlayback(bot, null);
     session.playing = false;
-    if (finished) reply(`播放结束: ${songName}`);
+    reply(`播放结束（共播放 ${playedSongs} 首）`);
 }
 
 function listSongs(keyword) {
@@ -516,15 +557,12 @@ function listSongs(keyword) {
 module.exports = async function (bot, context) {
     const { reply, args, log, config } = context;
     const session = getSession(bot);
-    // 参数用 | 分隔（曲名可含空格）；歌曲名后的参数可为 1bot/single/solo 强制单 bot 演奏
+    // 参数用 | 分隔（曲名可含空格）；除歌名外其余参数无序
     const params = parseArgs(args);
-    let singleBot = false;
-    if (params[1] && /^(1bot|single|solo)$/i.test(params[1])) {
-        singleBot = true;
-        params.splice(1, 1);
-    }
-    const [rawName = '', listKeyword = ''] = params;
+    let restParams = params.slice(1);
+    let rawName = params[0] || '';
     const sub = rawName.toLowerCase();
+    if (sub === 'play') { rawName = params[1] || ''; restParams = params.slice(2); } // 兼容 playnbs play | <歌名>
 
     if (sub === 'stop') {
         stopPlayback(bot, reply);
@@ -532,19 +570,44 @@ module.exports = async function (bot, context) {
     }
 
     if (sub === 'list') {
-        const matched = listSongs(listKeyword);
+        const matched = listSongs(params[1] || '');
         reply(`songs/ 目录下共 ${matched.length} 首匹配歌曲：`);
         const names = matched.slice(0, 15).map((f) => '  ' + path.relative(SONG_DIR, f));
         reply(names.length ? names.join('\n') : '（没有找到 .nbs 文件，请先放歌到 songs/ 文件夹）');
         return;
     }
 
-    let fileName = rawName;
-    if (sub === 'play') fileName = parseArgs(args).slice(1).join(' '); // 兼容 playnbs play | <歌名>
-
-    if (!fileName || fileName === 'help') {
-        reply('用法: **run playnbs <歌曲名.nbs> | [1bot] | stop | list | <关键词>（1bot 强制单 bot 演奏）');
+    if (!rawName || rawName === 'help') {
+        reply('用法: **run playnbs <歌曲名.nbs> | [参数...] | stop | list | <关键词>');
+        reply('参数无序: 1bot/single/solo 强制单 bot | once/loop/list/listloop/random 播放模式');
         reply(`歌曲文件放到项目根目录 songs/ 文件夹（${SONG_DIR}）`);
+        return;
+    }
+
+    // 无序参数解析 + 校验（1bot + 播放模式）
+    let singleBot = false;
+    let playMode = 'once';
+    const seenKinds = new Set();
+    const dupes = [];
+    const invalid = [];
+    for (const raw of restParams) {
+        if (!raw) continue;
+        const tok = raw.toLowerCase();
+        let kind = null;
+        if (/^(1bot|single|solo)$/.test(tok)) kind = 'single';
+        else if (/^(once|loop|list|listloop|random)$/.test(tok)) kind = 'playmode';
+        else { invalid.push(raw); continue; }
+        if (seenKinds.has(kind)) { dupes.push(raw); continue; }
+        seenKinds.add(kind);
+        if (kind === 'single') singleBot = true;
+        else playMode = tok;
+    }
+    if (dupes.length || invalid.length) {
+        const parts = [];
+        if (dupes.length) parts.push('重复/冲突: ' + dupes.join('、'));
+        if (invalid.length) parts.push('无法识别: ' + invalid.join('、'));
+        reply('参数有误：' + parts.join('；'));
+        reply('参数: 1bot/single/solo | once/loop/list/listloop/random（无序，重复/冲突会报错）');
         return;
     }
 
@@ -557,7 +620,7 @@ module.exports = async function (bot, context) {
 
     // 路径安全校验：只允许 songs/ 目录内的文件（防止 ../ 越权）
     if (!fs.existsSync(SONG_DIR)) fs.mkdirSync(SONG_DIR, { recursive: true });
-    let target = path.resolve(SONG_DIR, fileName);
+    let target = path.resolve(SONG_DIR, rawName);
     if (!target.startsWith(SONG_DIR + path.sep)) {
         reply('非法路径，只允许 songs/ 目录内的歌曲');
         return;
@@ -568,7 +631,7 @@ module.exports = async function (bot, context) {
         if (fs.existsSync(alt)) target = alt;
     }
     if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
-        reply(`歌曲不存在: songs/${fileName}（可用 **run playnbs list 查看）`);
+        reply(`歌曲不存在: songs/${rawName}（可用 **run playnbs list 查看）`);
         return;
     }
     if (!target.toLowerCase().endsWith('.nbs')) {
@@ -576,6 +639,5 @@ module.exports = async function (bot, context) {
         return;
     }
 
-    reply(`开始播放: ${path.relative(SONG_DIR, target)}`);
-    await playNBS(bot, session, target, reply, log, config, singleBot);
+    await playNBS(bot, session, target, reply, log, config, { singleBot, playMode });
 };

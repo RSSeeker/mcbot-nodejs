@@ -707,6 +707,16 @@
 
         <!-- 右侧面板: 视角 + 寻路 + 跟随 + 日志 -->
         <div class="panel">
+            <div class="panel-title">▶️ 运行脚本</div>
+            <div class="row-group" style="flex-wrap:wrap;">
+                <input type="text" id="runScriptName" placeholder="脚本名 (如 playmidi)" style="flex:1;min-width:90px;">
+                <button class="btn btn-accent" onclick="doRunScript()" style="padding:4px 8px;font-size:10px;">运行</button>
+            </div>
+            <div class="row-group" style="margin-top:4px;">
+                <input type="text" id="runScriptArgs" placeholder="参数（用 | 分隔，如 Alpha.mid | 2 | pitch）" style="flex:1;"
+                    onkeydown="if(event.key==='Enter')doRunScript()">
+            </div>
+
             <div class="panel-title">👁️ 视角控制</div>
             <div class="row-group">
                 <label>Yaw:</label>
@@ -1196,6 +1206,17 @@
             const addr = document.getElementById('pingAddr').value.trim();
             socket.emit('ping', { addr: addr });
             addLog('info', addr ? `正在 Ping ${addr}...` : '正在 Ping 当前服务器...');
+        }
+
+        // 运行脚本：脚本名 + 参数（参数用 | 分隔）
+        function doRunScript() {
+            if (!connected) { addLog('warn', 'Bot 未连接'); return; }
+            const name = document.getElementById('runScriptName').value.trim();
+            const params = document.getElementById('runScriptArgs').value.trim();
+            if (!name) { addLog('warn', '请输入脚本名称'); return; }
+            if (!/^[\w-]+$/.test(name)) { addLog('warn', '脚本名只能包含字母/数字/下划线/连字符'); return; }
+            socket.emit('run_script', { name, params });
+            addLog('info', `运行脚本: ${name}${params ? ' ' + params : ''}`);
         }
 
         socket.on('ping_result', (data) => {

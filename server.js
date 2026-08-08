@@ -1111,6 +1111,21 @@ io.on('connection', (socket) => {
         writeLog('BOT_CHAT', `${bot.username}: ${msg}`);
     });
 
+    // 网页端“运行脚本”输入框：直接执行 **run，不依赖聊天回显
+    socket.on('run_script', (data) => {
+        const name = (data.name || '').trim();
+        const params = (data.params || '').trim();
+        if (!name || !bot) return;
+        if (!/^[\w-]+$/.test(name)) {
+            io.emit('chat_msg', { sender: '[系统]', message: '脚本名只能包含字母/数字/下划线/连字符' });
+            return;
+        }
+        const line = `run ${name}${params ? ' ' + params : ''}`;
+        const player = TRUSTED_PLAYERS[0] || ''; // 用信任玩家身份执行（run 在 trusted_commands 时能通过）
+        writeLog('COMMAND', `web: ${CMD_PREFIX}${line}`);
+        executeCommand(line, player);
+    });
+
     socket.on('command', (data) => {
         const cmd = (data.command || '').trim();
         if (!cmd || !bot) return;
