@@ -353,7 +353,7 @@ function waitChildMessage(child, pattern, timeoutMs) {
 
 // 创建子 bot：主名+序号（如 RS_Bot1、RS_Bot2），出生后注册/登录/切键/传送到主 bot
 // 返回 child；5 秒内没 spawn 则判定登录失败返回 null
-async function createChildBot(bot, index, config, isCancelled = () => false) {
+async function createChildBot(bot, index, config, isCancelled = () => false, log = null) {
     const mineflayer = require('mineflayer');
     const username = bot.username + index; // 序号命名：主名+序号
     const child = mineflayer.createBot({
@@ -384,10 +384,14 @@ async function createChildBot(bot, index, config, isCancelled = () => false) {
     child.on('message', (jsonMsg) => {
         try {
             const text = typeof jsonMsg === 'string' ? jsonMsg : (jsonMsg && jsonMsg.toString ? jsonMsg.toString() : '');
+            if (log) log('info', `[子bot ${child.username}] 收到: ${text}`);
             handleCaptchaText(text);
         } catch (e) {}
     });
-    child.on('chat', (name, msg) => handleCaptchaText(msg));
+    child.on('chat', (name, msg) => {
+        if (log) log('info', `[子bot ${child.username}] 聊天 ${name}: ${msg}`);
+        handleCaptchaText(msg);
+    });
 
     let spawned = false;
     let resolveReady;
@@ -429,8 +433,14 @@ async function createChildBot(bot, index, config, isCancelled = () => false) {
             }
         }, 200);
     });
-    child.on('error', () => {});
-    child.on('kicked', () => {});
+    child.on('error', (err) => {
+        if (log) log('warn', `[子bot ${child.username}] 错误: ${err && err.message ? err.message : err}`);
+    });
+    child.on('kicked', (reason) => {
+        let text = '';
+        try { text = typeof reason === 'string' ? reason : JSON.stringify(reason); } catch (e) { text = String(reason); }
+        if (log) log('warn', `[子bot ${child.username}] 被踢: ${text}`);
+    });
 
     // 等待出生（最多 CHILD_LOGIN_WAIT 毫秒；被取消则立即放弃），失败则放弃该小号
     const deadline = Date.now() + CHILD_LOGIN_WAIT;
@@ -782,7 +792,7 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         while (cur.length < wanted) {
             if (isStopped()) break;
             const k = nextChildIndex(bot);
-            const child = await createChildBot(bot, k, config, isStopped).catch(() => null);
+            const child = await createChildBot(bot, k, config, isStopped, log).catch(() => null);
             if (isStopped()) {
                 if (child) { try { child.quit(); } catch (e) {} }
                 break;
