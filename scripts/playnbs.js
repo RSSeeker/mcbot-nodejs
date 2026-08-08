@@ -18,7 +18,10 @@
  * 参数（无序，写哪个激活哪个）:
  *   1bot / single / solo: 强制单 bot 演奏
  *   once（默认）: 单曲播放一次 | loop: 单曲循环
- *   list: 列表播放一次（从当前歌按字母序往下播）| listloop: 列表循环 | random: 随机播放
+ *   list: 列表播放一次（从当前歌按字母序往下播）| listloop: 列表循环
+ *   random: 随机播放 | random_once: 随机不重复（播完一轮重置）
+ *
+ * 多 bot：约束分配，每 bot 7 秒窗口 ≤ 450 包且 1 秒窗口 ≤ 280 包；切歌复用小号，结束时延迟回收。
  *
  * 歌曲文件放到项目根目录的 songs/ 文件夹下。
  */
@@ -48,25 +51,33 @@ const CHILD_LOGIN_WAIT = 5000; // 等待出生（spawn）的最长时间
 // 发包频率限制器：每个 bot 每 7 秒最多发 MAX_PACKETS_PER_WINDOW 个 tab_complete 包，
 // 与 Paper 的 packet-limiter（500 包/7s）同款滑动窗口语义。
 // 450 = 500 的 90%，给 GC 抖动 / TPS 波动 / ViaVersion 封装等留生产余量
-const MAX_PACKETS_PER_WINDOW = 450;
+const MAX_PACKETS_PER_WINDOW = 450; // 7 秒上限
 const RATE_WINDOW_MS = 7000;
+const MAX_PACKETS_PER_1S = 280;     // 1 秒上限
+const RATE_1S_MS = 1000;
 // 发包限速开关（false 关闭）
 const RATE_LIMIT_ENABLED = true;
 
-function makeRateLimiter(windowPackets = MAX_PACKETS_PER_WINDOW, windowMs = RATE_WINDOW_MS) {
+// 协同限速：每 bot 7 秒 ≤ MAX_PACKETS_PER_WINDOW 且 1 秒 ≤ MAX_PACKETS_PER_1S
+function makeRateLimiter() {
     if (!RATE_LIMIT_ENABLED) {
         // 不限速：每次调用立即返回
         return async function waitSlot() {};
     }
     const times = [];
     return async function waitSlot() {
-        const now = performance.now();
-        // 滚动窗口：7 秒内已满则等到最早的包滑出窗口
-        while (times.length && now - times[0] >= windowMs) times.shift();
-        if (times.length >= windowPackets) {
-            const wait = times[0] + windowMs - now;
-            if (wait > 0) await sleep(wait);
-            times.shift();
+        for (;;) {
+            const now = performance.now();
+            while (times.length && now - times[0] >= RATE_WINDOW_MS) times.shift();
+            let idx1 = 0;
+            while (idx1 < times.length && now - times[idx1] >= RATE_1S_MS) idx1++;
+            const c7 = times.length;
+            const c1 = times.length - idx1;
+            let wait = 0;
+            if (c7 >= MAX_PACKETS_PER_WINDOW) wait = Math.max(wait, times[0] + RATE_WINDOW_MS - now);
+            if (c1 >= MAX_PACKETS_PER_1S) wait = Math.max(wait, times[idx1] + RATE_1S_MS - now);
+            if (wait <= 0) break;
+            await sleep(wait);
         }
         times.push(performance.now());
     };
@@ -215,44 +226,54 @@ async function createChildBot(bot, index, config, isCancelled = () => false) {
 // 返回 { botCount, assign, fits, maxLoad }
 //   assign[i] = 第 i 个音符分配的 bot 下标；fits=false 表示 maxBots 内无法满足
 
-function allocateBots(notes, safeLimit, maxBots, windowSec = 7) {
+function allocateBots(notes, safeLimit7s, maxBots, safeLimit1s = 280, windowSec = 7, window1s = 1) {
     const n = notes.length;
-    if (n === 0) return { botCount: 1, assign: [], fits: true, maxLoad: 0 };
+    if (n === 0) return { botCount: 1, assign: [], fits: true, maxLoad7: 0, maxLoad1: 0 };
     for (let botCount = 1; botCount <= maxBots; botCount++) {
-        // 每个 bot 维护一个时间数组 + head 指针（数组有序，滑动窗口 O(1) 均摊）
-        const queues = Array.from({ length: botCount }, () => ({ arr: [], head: 0 }));
+        // 每个 bot 维护时间数组 + 两个 head 指针（7s / 1s 滑动窗口，O(1) 均摊）
+        const queues = Array.from({ length: botCount }, () => ({ arr: [], h7: 0, h1: 0 }));
         const assign = new Array(n);
         let fits = true;
         for (let i = 0; i < n; i++) {
             const t = notes[i].seconds;
-            let best = 0, bestLoad = Infinity;
+            let best = 0, bestNorm = Infinity;
             for (let b = 0; b < botCount; b++) {
                 const q = queues[b];
-                while (q.head < q.arr.length && q.arr[q.head] < t - windowSec) q.head++;
-                const load = q.arr.length - q.head;
-                if (load < bestLoad) { bestLoad = load; best = b; }
+                while (q.h7 < q.arr.length && q.arr[q.h7] < t - windowSec) q.h7++;
+                while (q.h1 < q.arr.length && q.arr[q.h1] < t - window1s) q.h1++;
+                const load7 = q.arr.length - q.h7;
+                const load1 = q.arr.length - q.h1;
+                const norm = Math.max(load7 / safeLimit7s, load1 / safeLimit1s);
+                if (norm < bestNorm) { bestNorm = norm; best = b; }
             }
-            if (bestLoad >= safeLimit) { fits = false; break; }
-            queues[best].arr.push(t);
+            const q = queues[best];
+            const load7 = q.arr.length - q.h7;
+            const load1 = q.arr.length - q.h1;
+            if (load7 >= safeLimit7s || load1 >= safeLimit1s) { fits = false; break; }
+            q.arr.push(t);
             assign[i] = best;
         }
         if (fits) {
-            // 独立验证：统计每个 bot 的实际 7s 窗口峰值
-            let maxLoad = 0;
+            // 独立验证：统计每个 bot 的实际 7s 与 1s 窗口峰值
+            let maxLoad7 = 0, maxLoad1 = 0;
             const perBot = Array.from({ length: botCount }, () => []);
             for (let i = 0; i < n; i++) perBot[assign[i]].push(notes[i].seconds);
             for (const times of perBot) {
-                let left = 0;
+                let l7 = 0, l1 = 0;
                 for (let right = 0; right < times.length; right++) {
-                    while (times[right] - times[left] > windowSec) left++;
-                    maxLoad = Math.max(maxLoad, right - left + 1);
+                    while (times[right] - times[l7] > windowSec) l7++;
+                    while (times[right] - times[l1] > window1s) l1++;
+                    const c7 = right - l7 + 1;
+                    const c1 = right - l1 + 1;
+                    if (c7 > maxLoad7) maxLoad7 = c7;
+                    if (c1 > maxLoad1) maxLoad1 = c1;
                 }
             }
-            return { botCount, assign, fits: true, maxLoad };
+            return { botCount, assign, fits: true, maxLoad7, maxLoad1 };
         }
     }
     // 达到 maxBots 仍不满足：返回贪心结果（由限速器兜底，最多只是拖慢）
-    return { botCount: maxBots, assign: null, fits: false, maxLoad: 0 };
+    return { botCount: maxBots, assign: null, fits: false, maxLoad7: 0, maxLoad1: 0 };
 }
 // 最多同时使用的 bot 数（1 主 + 9 小号）
 const MAX_BOTS = 10;
@@ -307,6 +328,30 @@ function stopPlayback(bot, reply) {
     }
     if (reply) reply('已停止播放');
     return old.map((e) => e && e.child).filter(Boolean);
+}
+
+// 延迟回收小号：3 秒后再断开，给服务端清理时间；期间名字保留，避免新小号同名冲突
+function delayedQuitChildren(bot, session) {
+    const old = session.childBots;
+    session.childBots = [];
+    const reserved = (bot.__childNamesReserved = bot.__childNamesReserved || new Set());
+    for (const entry of old) {
+        const c = entry && entry.child;
+        if (!c || !c._client || c._client.ended) continue;
+        reserved.add(c.username);
+        setTimeout(() => {
+            try { if (c._client && !c._client.ended) c.quit(); } catch (e) {}
+            reserved.delete(c.username);
+        }, 3000);
+    }
+}
+
+// 选一个未被“延迟回收中”占用的槽位名（RS_Bot1..N）
+function nextChildIndex(bot) {
+    const reserved = bot.__childNamesReserved || new Set();
+    let k = 1;
+    while (reserved.has(bot.username + k)) k++;
+    return k;
 }
 
 function isClientAlive(target) {
@@ -367,7 +412,7 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
         }
     }
 
-    // 歌曲列表（按文件名字母排序，全路径，含子目录）
+    // 歌曲列表（按文件名字母排序，全路径，含子目录）；快照化，播放期间不受外部文件变化影响
     const allSongs = [];
     const walk = (dir) => {
         if (!fs.existsSync(dir)) return;
@@ -379,6 +424,7 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
     };
     walk(SONG_DIR);
     allSongs.sort((a, b) => path.basename(a).toLowerCase().localeCompare(path.basename(b).toLowerCase()));
+    const playlist = [...allSongs];
     let curIdx = allSongs.findIndex(s => path.basename(s).toLowerCase() === path.basename(filePath).toLowerCase());
     if (curIdx < 0) { allSongs.push(filePath); allSongs.sort((a, b) => path.basename(a).toLowerCase().localeCompare(path.basename(b).toLowerCase())); curIdx = allSongs.indexOf(filePath); }
 
@@ -407,33 +453,22 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
         if (singleBot) {
             botCount = 1;
         } else {
-            const alloc = allocateBots(flatNotes, MAX_PACKETS_PER_WINDOW, MAX_BOTS);
+            const alloc = allocateBots(flatNotes, MAX_PACKETS_PER_WINDOW, MAX_BOTS, MAX_PACKETS_PER_1S);
             botCount = alloc.botCount;
             assign = alloc.assign;
-            if (alloc.fits) log('info', `约束分配：${botCount} 个 bot，每 bot 7 秒窗口最多 ${alloc.maxLoad} 包（上限 ${MAX_PACKETS_PER_WINDOW}）`);
+            if (alloc.fits) log('info', `约束分配：${botCount} 个 bot，每 bot 7s 窗口最多 ${alloc.maxLoad7} 包（≤${MAX_PACKETS_PER_WINDOW}）、1s 窗口最多 ${alloc.maxLoad1} 包（≤${MAX_PACKETS_PER_1S}）`);
             else log('warn', `${MAX_BOTS} 个 bot 仍无法满足约束，限速器兜底`);
         }
         log('info', `正在播放: ${songName}，曲长 ${songLength} tick，速度 ${songSpeed}ms/tick，预计 ${(songLength * songSpeed / 1000).toFixed(1)}s | 音符 ${totalNotes}，需要 ${botCount} 个 bot${singleBot ? '（强制单 bot）' : ''}`);
         return { rows, songSpeed, songName, botCount, assign };
     }
 
-    // 动态调整小号数量到 wantedBotCount（1 主 + wanted-1 小号）
+    // 动态调整小号数量：切歌时复用小号（只增不减，避免登录风暴），结束时统一延迟回收
     async function adjustBots(wantedBotCount) {
         const wanted = Math.max(0, wantedBotCount - 1);
-        while (session.childBots.length > wanted) {
-            const entry = session.childBots.pop();
-            const c = entry && entry.child;
-            if (c && c._client && !c._client.ended) {
-                try { c.quit(); } catch (e) {}
-                await Promise.race([
-                    new Promise((r) => { try { c.once('end', r); } catch (e) { r(); } }),
-                    sleep(1500),
-                ]);
-            }
-        }
         while (session.childBots.length < wanted) {
             if (isStopped()) break;
-            const k = session.childBots.length + 1;
+            const k = nextChildIndex(bot);
             const child = await createChildBot(bot, k, config, isStopped).catch(() => null);
             if (isStopped()) {
                 if (child) { try { child.quit(); } catch (e) {} }
@@ -456,6 +491,7 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
         let nextTick = performance.now();
         let transactionId = 1;
         let flatIdx = 0;
+        let childDied = false;
         for (let j = 0; j < rows.length; j++) {
             if (isStopped()) break;
             if (!isClientAlive(bot)) {
@@ -474,13 +510,26 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
             for (let i = 0; i < row.length; i++, flatIdx++) {
                 if (isStopped()) break;
                 let sender;
+                let usedFallback = false;
                 if (assign && assign[flatIdx] !== undefined) {
                     const target = botList[assign[flatIdx]];
-                    sender = (target && isClientAlive(target)) ? target : alive[fallback % alive.length];
-                    if (sender !== target) fallback++;
+                    if (target && isClientAlive(target)) {
+                        sender = target;
+                    } else {
+                        // 指定 bot 掉线 → 退到存活 bot 接盘
+                        sender = alive[fallback % alive.length];
+                        fallback++;
+                        usedFallback = true;
+                    }
                 } else {
                     sender = alive[fallback % alive.length];
                     fallback++;
+                }
+                // 小号掉线接盘：暂停 1s 泄压，避免主 bot 1s 窗口瞬时冲高（绝对安全模式）
+                if (usedFallback && !childDied) {
+                    childDied = true;
+                    log('warn', '[playnbs] 小号掉线，主 bot 接盘，暂停 1s 泄压');
+                    await sleep(1000);
                 }
                 await limiterFor(sender)();
                 try {
@@ -494,21 +543,30 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
     }
 
     // 决定下一首
+    const playedSet = new Set(); // random_once 的已播集合
     function pickNext(idx) {
         if (playMode === 'once') return null;
         if (playMode === 'loop') return idx;
-        if (playMode === 'list') return (idx + 1 < allSongs.length) ? idx + 1 : null;
-        if (playMode === 'listloop') return (idx + 1) % allSongs.length;
-        if (playMode === 'random') {
-            if (allSongs.length <= 1) return idx;
+        if (playMode === 'list') return (idx + 1 < playlist.length) ? idx + 1 : null;
+        if (playMode === 'listloop') return (idx + 1) % playlist.length;
+        if (playMode === 'random_once') {
+            if (playlist.length <= 1) return idx;
+            playedSet.add(playlist[idx]);
+            if (playedSet.size >= playlist.length) playedSet.clear(); // 播完所有再重置
             let ni;
-            do { ni = Math.floor(Math.random() * allSongs.length); } while (ni === idx);
+            do { ni = Math.floor(Math.random() * playlist.length); } while (playedSet.has(playlist[ni]));
+            return ni;
+        }
+        if (playMode === 'random') {
+            if (playlist.length <= 1) return idx;
+            let ni;
+            do { ni = Math.floor(Math.random() * playlist.length); } while (ni === idx);
             return ni;
         }
         return null;
     }
 
-    const MODE_NAMES = { once: '单曲播放一次', loop: '单曲循环', list: '列表播放一次', listloop: '列表循环', random: '随机播放' };
+    const MODE_NAMES = { once: '单曲播放一次', loop: '单曲循环', list: '列表播放一次', listloop: '列表循环', random: '随机播放', random_once: '随机不重复播放' };
     reply(`播放模式: ${MODE_NAMES[playMode]}${playMode !== 'once' ? `，从 ${path.basename(filePath)} 开始` : ''}`);
 
     // 主循环：每首播完提前算下一首的 bot 量，动态增减小号
@@ -518,7 +576,7 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
     await adjustBots(prep.botCount);
 
     while (prep && !isStopped()) {
-        reply(`开始播放: ${path.relative(SONG_DIR, allSongs[curIdx])}`);
+        reply(`开始播放: ${path.relative(SONG_DIR, playlist[curIdx])}`);
         const ok = await playSong(prep);
         playedSongs++;
         if (!ok) break;
@@ -528,12 +586,13 @@ async function playNBS(bot, session, filePath, reply, log, config, options = {})
             break;
         }
         curIdx = ni;
-        prep = await prepareSong(allSongs[curIdx]).catch((err) => { reply(err.message); return null; });
+        prep = await prepareSong(playlist[curIdx]).catch((err) => { reply(err.message); return null; });
         if (!prep) break;
         await adjustBots(prep.botCount);
     }
 
-    stopPlayback(bot, null);
+    delayedQuitChildren(bot, session);
+    session.token++;
     session.playing = false;
     reply(`播放结束（共播放 ${playedSongs} 首）`);
 }
@@ -595,7 +654,7 @@ module.exports = async function (bot, context) {
         const tok = raw.toLowerCase();
         let kind = null;
         if (/^(1bot|single|solo)$/.test(tok)) kind = 'single';
-        else if (/^(once|loop|list|listloop|random)$/.test(tok)) kind = 'playmode';
+        else if (/^(once|loop|list|listloop|random|random_once)$/.test(tok)) kind = 'playmode';
         else { invalid.push(raw); continue; }
         if (seenKinds.has(kind)) { dupes.push(raw); continue; }
         seenKinds.add(kind);

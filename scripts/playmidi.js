@@ -20,9 +20,10 @@
  *   notempo / ignoretempo / none: 忽略 MIDI 变速事件，按固定 120BPM 播放
  *   once（默认）: 单曲播放一次 | loop: 单曲循环
  *   list: 列表播放一次（从当前歌按字母序往下播到最后一个）
- *   listloop: 列表循环 | random: 随机播放
+ *   listloop: 列表循环 | random: 随机播放 | random_once: 随机不重复（播完一轮重置）
  *
- * 多 bot：约束分配，保证每个 bot 任意 7 秒窗口 ≤ 450 包；每首播完动态增减小号。
+ * 多 bot：约束分配，保证每个 bot 任意 7 秒窗口 ≤ 450 包且 1 秒窗口 ≤ 280 包；
+ * 切歌复用小号（只增不减），结束时延迟回收（3 秒，名字保留防冲突）。
  *
  * 注意:
  *   - MIDI 音符无时长概念，note_off 忽略（与 NBS 一致，触发一声）
@@ -291,25 +292,33 @@ const CHILD_LOGIN_WAIT = 5000; // 等待出生（spawn）的最长时间
 // 发包频率限制器：每个 bot 每 7 秒最多发 MAX_PACKETS_PER_WINDOW 个 tab_complete 包，
 // 与 Paper 的 packet-limiter（500 包/7s）同款滑动窗口语义。
 // 450 = 500 的 90%，给 GC 抖动 / TPS 波动 / ViaVersion 封装等留生产余量
-const MAX_PACKETS_PER_WINDOW = 450;
+const MAX_PACKETS_PER_WINDOW = 450; // 7 秒上限
 const RATE_WINDOW_MS = 7000;
+const MAX_PACKETS_PER_1S = 280;     // 1 秒上限
+const RATE_1S_MS = 1000;
 // 发包限速开关（false 关闭）
 const RATE_LIMIT_ENABLED = true;
 
-function makeRateLimiter(windowPackets = MAX_PACKETS_PER_WINDOW, windowMs = RATE_WINDOW_MS) {
+// 协同限速：每 bot 7 秒 ≤ MAX_PACKETS_PER_WINDOW 且 1 秒 ≤ MAX_PACKETS_PER_1S
+function makeRateLimiter() {
     if (!RATE_LIMIT_ENABLED) {
         // 不限速：每次调用立即返回
         return async function waitSlot() {};
     }
     const times = [];
     return async function waitSlot() {
-        const now = performance.now();
-        // 滚动窗口：7 秒内已满则等到最早的包滑出窗口
-        while (times.length && now - times[0] >= windowMs) times.shift();
-        if (times.length >= windowPackets) {
-            const wait = times[0] + windowMs - now;
-            if (wait > 0) await sleep(wait);
-            times.shift();
+        for (;;) {
+            const now = performance.now();
+            while (times.length && now - times[0] >= RATE_WINDOW_MS) times.shift();
+            let idx1 = 0;
+            while (idx1 < times.length && now - times[idx1] >= RATE_1S_MS) idx1++;
+            const c7 = times.length;
+            const c1 = times.length - idx1;
+            let wait = 0;
+            if (c7 >= MAX_PACKETS_PER_WINDOW) wait = Math.max(wait, times[0] + RATE_WINDOW_MS - now);
+            if (c1 >= MAX_PACKETS_PER_1S) wait = Math.max(wait, times[idx1] + RATE_1S_MS - now);
+            if (wait <= 0) break;
+            await sleep(wait);
         }
         times.push(performance.now());
     };
@@ -458,44 +467,54 @@ async function createChildBot(bot, index, config, isCancelled = () => false) {
 // 返回 { botCount, assign, fits, maxLoad }
 //   assign[i] = 第 i 个音符分配的 bot 下标；fits=false 表示 maxBots 内无法满足
 
-function allocateBots(notes, safeLimit, maxBots, windowSec = 7) {
+function allocateBots(notes, safeLimit7s, maxBots, safeLimit1s = 280, windowSec = 7, window1s = 1) {
     const n = notes.length;
-    if (n === 0) return { botCount: 1, assign: [], fits: true, maxLoad: 0 };
+    if (n === 0) return { botCount: 1, assign: [], fits: true, maxLoad7: 0, maxLoad1: 0 };
     for (let botCount = 1; botCount <= maxBots; botCount++) {
-        // 每个 bot 维护一个时间数组 + head 指针（数组有序，滑动窗口 O(1) 均摊）
-        const queues = Array.from({ length: botCount }, () => ({ arr: [], head: 0 }));
+        // 每个 bot 维护时间数组 + 两个 head 指针（7s / 1s 滑动窗口，O(1) 均摊）
+        const queues = Array.from({ length: botCount }, () => ({ arr: [], h7: 0, h1: 0 }));
         const assign = new Array(n);
         let fits = true;
         for (let i = 0; i < n; i++) {
             const t = notes[i].seconds;
-            let best = 0, bestLoad = Infinity;
+            let best = 0, bestNorm = Infinity;
             for (let b = 0; b < botCount; b++) {
                 const q = queues[b];
-                while (q.head < q.arr.length && q.arr[q.head] < t - windowSec) q.head++;
-                const load = q.arr.length - q.head;
-                if (load < bestLoad) { bestLoad = load; best = b; }
+                while (q.h7 < q.arr.length && q.arr[q.h7] < t - windowSec) q.h7++;
+                while (q.h1 < q.arr.length && q.arr[q.h1] < t - window1s) q.h1++;
+                const load7 = q.arr.length - q.h7;
+                const load1 = q.arr.length - q.h1;
+                const norm = Math.max(load7 / safeLimit7s, load1 / safeLimit1s);
+                if (norm < bestNorm) { bestNorm = norm; best = b; }
             }
-            if (bestLoad >= safeLimit) { fits = false; break; }
-            queues[best].arr.push(t);
+            const q = queues[best];
+            const load7 = q.arr.length - q.h7;
+            const load1 = q.arr.length - q.h1;
+            if (load7 >= safeLimit7s || load1 >= safeLimit1s) { fits = false; break; }
+            q.arr.push(t);
             assign[i] = best;
         }
         if (fits) {
-            // 独立验证：统计每个 bot 的实际 7s 窗口峰值
-            let maxLoad = 0;
+            // 独立验证：统计每个 bot 的实际 7s 与 1s 窗口峰值
+            let maxLoad7 = 0, maxLoad1 = 0;
             const perBot = Array.from({ length: botCount }, () => []);
             for (let i = 0; i < n; i++) perBot[assign[i]].push(notes[i].seconds);
             for (const times of perBot) {
-                let left = 0;
+                let l7 = 0, l1 = 0;
                 for (let right = 0; right < times.length; right++) {
-                    while (times[right] - times[left] > windowSec) left++;
-                    maxLoad = Math.max(maxLoad, right - left + 1);
+                    while (times[right] - times[l7] > windowSec) l7++;
+                    while (times[right] - times[l1] > window1s) l1++;
+                    const c7 = right - l7 + 1;
+                    const c1 = right - l1 + 1;
+                    if (c7 > maxLoad7) maxLoad7 = c7;
+                    if (c1 > maxLoad1) maxLoad1 = c1;
                 }
             }
-            return { botCount, assign, fits: true, maxLoad };
+            return { botCount, assign, fits: true, maxLoad7, maxLoad1 };
         }
     }
     // 达到 maxBots 仍不满足：返回贪心结果（由限速器兜底，最多只是拖慢）
-    return { botCount: maxBots, assign: null, fits: false, maxLoad: 0 };
+    return { botCount: maxBots, assign: null, fits: false, maxLoad7: 0, maxLoad1: 0 };
 }
 // 最多同时使用的 bot 数（1 主 + 9 小号）
 const MAX_BOTS = 10;
@@ -513,10 +532,25 @@ function isAlive(bot) {
 
 function quitPlaymidiChildren(bot) {
     const list = bot.__playmidiChildren || [];
-    for (const c of list) {
-        try { if (c && c._client && !c._client.ended) c.quit(); } catch (e) {}
-    }
     bot.__playmidiChildren = [];
+    const reserved = (bot.__childNamesReserved = bot.__childNamesReserved || new Set());
+    // 延迟回收：3 秒后再断开，给服务端清理时间；期间名字保留，避免新小号同名冲突
+    for (const c of list) {
+        if (!c || !c._client || c._client.ended) continue;
+        reserved.add(c.username);
+        setTimeout(() => {
+            try { if (c._client && !c._client.ended) c.quit(); } catch (e) {}
+            reserved.delete(c.username);
+        }, 3000);
+    }
+}
+
+// 选一个未被“延迟回收中”占用的槽位名（RS_Bot1..N）
+function nextChildIndex(bot) {
+    const reserved = bot.__childNamesReserved || new Set();
+    let k = 1;
+    while (reserved.has(bot.username + k)) k++;
+    return k;
 }
 
 // 每个 bot 独立的发包限速器（服务端有发包频率限制，超了会被踢）
@@ -633,7 +667,7 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         let kind = null, value = null;
         if (/^(1bot|single|solo)$/.test(tok)) kind = 'single';
         else if (/^(notempo|ignoretempo|none)$/.test(tok)) kind = 'notempo';
-        else if (/^(once|loop|list|listloop|random)$/.test(tok)) { kind = 'playmode'; value = tok; }
+        else if (/^(once|loop|list|listloop|random|random_once)$/.test(tok)) { kind = 'playmode'; value = tok; }
         else if (tok === 'pitch' || tok === 'auto') { kind = 'mode'; value = tok; }
         else if (/^(inst|ins):(\d{1,2})$/.test(tok)) { kind = 'mode'; value = 'inst:' + parseInt(tok.split(':')[1], 10); }
         else if (/^\d+(\.\d+)?$/.test(tok)) { kind = 'speed'; value = parseFloat(tok); }
@@ -687,12 +721,13 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         return;
     }
 
-    // 歌曲列表（按文件名首字母排序，全路径）
+    // 歌曲列表（按文件名首字母排序，全路径）；快照化，播放期间不受外部文件变化影响
     const allSongs = fs.existsSync(MIDI_DIR)
         ? fs.readdirSync(MIDI_DIR).filter(f => /\.midi?$/i.test(f))
             .map(f => path.join(MIDI_DIR, f))
             .sort((a, b) => path.basename(a).toLowerCase().localeCompare(path.basename(b).toLowerCase()))
         : [];
+    const playlist = [...allSongs];
     let curIdx = allSongs.findIndex(s => path.basename(s).toLowerCase() === path.basename(target).toLowerCase());
     if (curIdx < 0) {
         allSongs.push(target);
@@ -730,34 +765,23 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         if (singleBot) {
             botCount = 1;
         } else {
-            const alloc = allocateBots(timeline, MAX_PACKETS_PER_WINDOW, MAX_BOTS);
+            const alloc = allocateBots(timeline, MAX_PACKETS_PER_WINDOW, MAX_BOTS, MAX_PACKETS_PER_1S);
             botCount = alloc.botCount;
             assign = alloc.assign;
-            if (alloc.fits) log('info', `[playmidi] 约束分配：${botCount} 个 bot，每 bot 7 秒窗口最多 ${alloc.maxLoad} 包（上限 ${MAX_PACKETS_PER_WINDOW}）`);
+            if (alloc.fits) log('info', `[playmidi] 约束分配：${botCount} 个 bot，每 bot 7s 窗口最多 ${alloc.maxLoad7} 包（≤${MAX_PACKETS_PER_WINDOW}）、1s 窗口最多 ${alloc.maxLoad1} 包（≤${MAX_PACKETS_PER_1S}）`);
             else log('warn', `[playmidi] ${MAX_BOTS} 个 bot 仍无法满足约束，限速器兜底`);
         }
         return { timeline, tempoChanges, duration, botCount, assign };
     }
 
-    // 动态调整小号数量到 wantedBotCount（1 主 + wanted-1 小号）：多则退、少则补
+    // 动态调整小号数量：切歌时复用小号（只增不减，避免登录风暴），结束时统一延迟回收
     async function adjustBots(wantedBotCount) {
         const cur = bot.__playmidiChildren;
         const wanted = Math.max(0, wantedBotCount - 1);
-        // 减少：退掉多出来的（从后往前，等断开避免同名冲突）
-        while (cur.length > wanted) {
-            const c = cur.pop();
-            if (c && c._client && !c._client.ended) {
-                try { c.quit(); } catch (e) {}
-                await Promise.race([
-                    new Promise((r) => { try { c.once('end', r); } catch (e) { r(); } }),
-                    sleep(1500),
-                ]);
-            }
-        }
         // 增加：串行创建（复用槽位名 RS_Bot1..N）
         while (cur.length < wanted) {
             if (isStopped()) break;
-            const k = cur.length + 1;
+            const k = nextChildIndex(bot);
             const child = await createChildBot(bot, k, config, isStopped).catch(() => null);
             if (isStopped()) {
                 if (child) { try { child.quit(); } catch (e) {} }
@@ -783,6 +807,7 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         let i = 0;
         let played = 0;
         let tempoLogIdx = 0;
+        let childDied = false;
         while (!isStopped() && i < timeline.length) {
             if (!isAlive(bot)) {
                 log('warn', 'Bot 已断开，停止播放');
@@ -804,15 +829,28 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
                 const ch = charForNote(inst, key);
                 if (ch) {
                     let sender;
+                    let usedFallback = false;
                     if (assign && assign[noteIdx] !== undefined) {
                         const targetBot = botList[assign[noteIdx]];
-                        sender = (targetBot && isAlive(targetBot)) ? targetBot : senders[fallback % senders.length];
-                        if (sender !== targetBot) fallback++;
+                        if (targetBot && isAlive(targetBot)) {
+                            sender = targetBot;
+                        } else {
+                            // 指定 bot 掉线 → 退到存活 bot 接盘
+                            sender = senders[fallback % senders.length];
+                            fallback++;
+                            usedFallback = true;
+                        }
                     } else {
                         sender = senders[fallback % senders.length];
                         fallback++;
                     }
-                    // 每个 bot 独立限速（7 秒窗口 450 包），兜底防止“发包过多”被踢
+                    // 小号掉线接盘：暂停 1s 泄压，避免主 bot 1s 窗口瞬时冲高（绝对安全模式）
+                    if (usedFallback && !childDied) {
+                        childDied = true;
+                        log('warn', '[playmidi] 小号掉线，主 bot 接盘，暂停 1s 泄压');
+                        await sleep(1000);
+                    }
+                    // 每个 bot 独立限速（7 秒 ≤450 包、1 秒 ≤280 包），兜底防止“发包过多”被踢
                     await limiterFor(sender)();
                     try {
                         sender._client.write('tab_complete', { transactionId: transId++, text: '/// ' + ch });
@@ -830,21 +868,30 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
     }
 
     // 决定下一首（按播放模式），返回 null 表示结束
+    const playedSet = new Set(); // random_once 的已播集合
     function pickNext(idx) {
         if (playMode === 'once') return null;
         if (playMode === 'loop') return idx;
-        if (playMode === 'list') return (idx + 1 < allSongs.length) ? idx + 1 : null;
-        if (playMode === 'listloop') return (idx + 1) % allSongs.length;
-        if (playMode === 'random') {
-            if (allSongs.length <= 1) return idx;
+        if (playMode === 'list') return (idx + 1 < playlist.length) ? idx + 1 : null;
+        if (playMode === 'listloop') return (idx + 1) % playlist.length;
+        if (playMode === 'random_once') {
+            if (playlist.length <= 1) return idx;
+            playedSet.add(playlist[idx]);
+            if (playedSet.size >= playlist.length) playedSet.clear(); // 播完所有再重置
             let ni;
-            do { ni = Math.floor(Math.random() * allSongs.length); } while (ni === idx);
+            do { ni = Math.floor(Math.random() * playlist.length); } while (playedSet.has(playlist[ni]));
+            return ni;
+        }
+        if (playMode === 'random') {
+            if (playlist.length <= 1) return idx;
+            let ni;
+            do { ni = Math.floor(Math.random() * playlist.length); } while (ni === idx);
             return ni;
         }
         return null;
     }
 
-    const MODE_NAMES = { once: '单曲播放一次', loop: '单曲循环', list: '列表播放一次', listloop: '列表循环', random: '随机播放' };
+    const MODE_NAMES = { once: '单曲播放一次', loop: '单曲循环', list: '列表播放一次', listloop: '列表循环', random: '随机播放', random_once: '随机不重复播放' };
     reply(`播放模式: ${MODE_NAMES[playMode]}${playMode !== 'once' ? `，从 ${path.basename(target)} 开始` : ''}`);
 
     // 主循环：每首播完提前算下一首的 bot 量，动态增减小号
@@ -854,7 +901,7 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
     await adjustBots(prep.botCount);
 
     while (prep && !isStopped()) {
-        reply(`开始播放 ${path.basename(allSongs[curIdx])}（${prep.timeline.length} 个音符，预计 ${prep.duration.toFixed(1)}s${ignoreTempo ? '，已忽略变速' : ''}，**run playmidi stop 停止）`);
+        reply(`开始播放 ${path.basename(playlist[curIdx])}（${prep.timeline.length} 个音符，预计 ${prep.duration.toFixed(1)}s${ignoreTempo ? '，已忽略变速' : ''}，**run playmidi stop 停止）`);
         const ok = await playSong(prep);
         playedSongs++;
         if (!ok) break;
@@ -866,7 +913,7 @@ reply('用法: **run playmidi <歌曲.mid> | [参数...] | stop | list（参数�
         }
         curIdx = ni;
         // 提前计算下一首的 bot 量并增减
-        prep = await prepareSong(allSongs[curIdx]).catch((err) => { reply(err.message); return null; });
+        prep = await prepareSong(playlist[curIdx]).catch((err) => { reply(err.message); return null; });
         if (!prep) break;
         await adjustBots(prep.botCount);
     }
